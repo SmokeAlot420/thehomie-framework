@@ -1,0 +1,23 @@
+{
+  "skill_name": "vault-ingest",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Hey can you ingest this SEO research doc I just wrote into the vault? It's at research/target-perplexity-citations.md",
+      "expected_output": "File copied to coding-vault/research/, frontmatter added, wired into SEO MOC, canvas updated, MEMORY.md updated",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I have these 3 docs: docs/ADMIN-CRM-DEEP-DIVE.md, docs/VOICE-AI-DEEP-DIVE.md, and docs/FRONTEND-DEEP-DIVE.md. Red carpet them into the second brain vault",
+      "expected_output": "All 3 files placed in thehomie/docs/, frontmatter on each, the relevant MOC updated with 3 new links, and the closest system canvas updated with 3 nodes",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "vault this - it's a decision doc about whether to use Organization or InsuranceAgency schema type for the brand fleet",
+      "expected_output": "New decision doc created in coding-vault/decisions/ with ADR frontmatter, wired into relevant MOC, memory updated",
+      "files": []
+    }
+  ]
+}

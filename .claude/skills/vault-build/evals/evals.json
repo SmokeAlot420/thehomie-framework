@@ -1,0 +1,131 @@
+{
+  "skill": "vault-build",
+  "version": "1.0.0",
+  "test_cases": [
+    {
+      "id": "new-vault-from-scratch",
+      "description": "Build all 7 layers on a new folder of markdown notes with no .obsidian/ config",
+      "prompt": "I have a folder of markdown notes at C:\\Users\\YourUser\\.claude\\skills\\vault-build-workspace\\test-vault-1. Turn it into a proper Obsidian vault with dashboards, MOCs, templates, canvases, and everything.",
+      "setup_notes": "Create test-vault-1/ with 3 folders (projects/, research/, decisions/) and 10+ .md files with YAML frontmatter before running. Files should have varied status, priority, and tags.",
+      "assertions": [
+        {
+          "id": "creates-obsidian-dir",
+          "description": ".obsidian/ directory is created with app.json, appearance.json, core-plugins.json, community-plugins.json",
+          "check": "directory_exists",
+          "path": ".obsidian/"
+        },
+        {
+          "id": "installs-dataview",
+          "description": "Dataview plugin installed at .obsidian/plugins/dataview/ with all 4 files",
+          "check": "file_exists",
+          "path": ".obsidian/plugins/dataview/main.js"
+        },
+        {
+          "id": "creates-dashboards",
+          "description": "At least 2 dashboard files created in _dashboards/ with Dataview queries",
+          "check": "directory_has_files",
+          "path": "_dashboards/",
+          "min_count": 2
+        },
+        {
+          "id": "dashboard-references-real-folders",
+          "description": "Dashboard queries use FROM clauses that match actual vault folders (not generic placeholders)",
+          "check": "content_matches",
+          "pattern": "FROM \"(projects|research|decisions)\""
+        },
+        {
+          "id": "creates-mocs",
+          "description": "At least 1 MOC file created with curated wikilinks + auto-discovery query",
+          "check": "file_pattern_exists",
+          "pattern": "MOC-*.md"
+        },
+        {
+          "id": "creates-templates",
+          "description": "Templates created in _templates/ matching detected note categories",
+          "check": "directory_has_files",
+          "path": "_templates/",
+          "min_count": 2
+        },
+        {
+          "id": "creates-canvas",
+          "description": "At least 1 .canvas file created with valid JSON (nodes + edges arrays)",
+          "check": "directory_has_files",
+          "path": "_canvas/",
+          "min_count": 1
+        },
+        {
+          "id": "creates-graph-config",
+          "description": "graph.json has colorGroups array with at least 3 entries matching vault folders",
+          "check": "json_field_exists",
+          "path": ".obsidian/graph.json",
+          "field": "colorGroups"
+        },
+        {
+          "id": "creates-bookmarks",
+          "description": "bookmarks.json has items array with at least 2 entries",
+          "check": "json_field_exists",
+          "path": ".obsidian/bookmarks.json",
+          "field": "items"
+        }
+      ]
+    },
+    {
+      "id": "existing-vault-enhancement",
+      "description": "Add dashboards and canvases to an existing vault without overwriting config",
+      "prompt": "My Obsidian vault at C:\\Users\\YourUser\\coding-vault has notes but I want to verify what /vault-build would add. Run in dry-run mode: /vault-build C:\\Users\\YourUser\\coding-vault --dry-run",
+      "setup_notes": "Uses the real coding-vault which already has .obsidian/, dashboards, MOCs, templates, canvases. Dry-run should detect existing files and report what would be skipped vs added.",
+      "assertions": [
+        {
+          "id": "detects-existing-obsidian",
+          "description": "Reports that .obsidian/ already exists and would be merged (not overwritten)",
+          "check": "output_contains",
+          "pattern": "already exists|skip|merge"
+        },
+        {
+          "id": "detects-existing-dashboards",
+          "description": "Reports existing dashboards and does not propose overwriting them",
+          "check": "output_contains",
+          "pattern": "skip|already exists"
+        },
+        {
+          "id": "no-files-written",
+          "description": "In dry-run mode, no files are actually created or modified",
+          "check": "no_file_modifications"
+        },
+        {
+          "id": "reports-vault-analysis",
+          "description": "Output includes vault analysis: folder counts, frontmatter patterns, tag summary",
+          "check": "output_contains",
+          "pattern": "folder|notes|tags|frontmatter"
+        }
+      ]
+    },
+    {
+      "id": "single-phase-dashboards",
+      "description": "Run only Phase 3 (dashboards) on a vault that already has .obsidian/ config",
+      "prompt": "Just add dashboards to my vault at C:\\Users\\YourUser\\.claude\\skills\\vault-build-workspace\\test-vault-2. /vault-build C:\\Users\\YourUser\\.claude\\skills\\vault-build-workspace\\test-vault-2 --phase 3",
+      "setup_notes": "Create test-vault-2/ with .obsidian/ (from Phase 1) and dataview plugin (from Phase 2) pre-installed, plus 8+ notes in 2 folders. Phase 3 only should create dashboards without touching templates, MOCs, canvases, or graph config.",
+      "assertions": [
+        {
+          "id": "creates-dashboards-only",
+          "description": "Dashboard files created in _dashboards/",
+          "check": "directory_has_files",
+          "path": "_dashboards/",
+          "min_count": 2
+        },
+        {
+          "id": "no-templates-created",
+          "description": "No _templates/ directory created (Phase 6 was not requested)",
+          "check": "directory_not_exists",
+          "path": "_templates/"
+        },
+        {
+          "id": "no-mocs-created",
+          "description": "No MOC-*.md files created (Phase 4 was not requested)",
+          "check": "file_pattern_not_exists",
+          "pattern": "MOC-*.md"
+        }
+      ]
+    }
+  ]
+}

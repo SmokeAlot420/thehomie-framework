@@ -1,0 +1,51 @@
+{
+  "skill_name": "vault-sync",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "/vault-sync PRDs/PRD-obsidian-vault-wow.md",
+      "expected_output": "Reads the PRD, extracts all 7 completed phases, updates vault CLAUDE.md with an 'Obsidian Features' section documenting dashboards/MOCs/canvases/templates/graph/bookmarks, updates MEMORY.md Implementation Status with completion line, runs vault validation (44/44 clean), checks MEMORY.md line count (<200)",
+      "assertions": [
+        {"text": "Reads PRD-obsidian-vault-wow.md before making edits", "type": "behavior"},
+        {"text": "Reads vault CLAUDE.md before editing", "type": "behavior"},
+        {"text": "Reads MEMORY.md before editing", "type": "behavior"},
+        {"text": "Adds Obsidian Features section to vault CLAUDE.md", "type": "output"},
+        {"text": "Documents dashboards, MOCs, canvases, templates in CLAUDE.md", "type": "output"},
+        {"text": "Adds 'Obsidian Vault Wow: COMPLETE' to MEMORY.md Implementation Status", "type": "output"},
+        {"text": "Runs vault.py validate after edits", "type": "behavior"},
+        {"text": "Checks MEMORY.md line count is under 200", "type": "behavior"},
+        {"text": "Uses Edit tool, not Write, for modifications", "type": "behavior"},
+        {"text": "Does not duplicate existing entries", "type": "output"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/vault-sync \"Completed ISR build hardening — revalidation API, cache-warm GH Action, env ISR count, removed optimizeCss. Commit b21a37e.\"",
+      "expected_output": "Takes the description string (no PRD file), adds 'ISR Build Hardening: COMPLETE (b21a37e)' to MEMORY.md Implementation Status, adds relevant build gotchas (optimizeCss removed, ISR env var, revalidation endpoint), runs validation",
+      "assertions": [
+        {"text": "Does not try to read a file from the description string", "type": "behavior"},
+        {"text": "Reads MEMORY.md before editing", "type": "behavior"},
+        {"text": "Adds ISR Build Hardening status to Implementation Status section", "type": "output"},
+        {"text": "Includes commit hash b21a37e in status line", "type": "output"},
+        {"text": "Adds relevant build gotchas (optimizeCss, ISR count, revalidation)", "type": "output"},
+        {"text": "Runs vault.py validate after edits", "type": "behavior"},
+        {"text": "Checks MEMORY.md line count", "type": "behavior"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "/vault-sync --dry-run PRDs/PRD-geo-storm-v3.md",
+      "expected_output": "Reads the PRD, determines it has planned/in-progress phases, presents the update plan to the user WITHOUT making any edits — shows what would be added to vault CLAUDE.md (PRD table status update) and MEMORY.md (GEO Storm status), does NOT call Edit tool",
+      "assertions": [
+        {"text": "Reads PRD-geo-storm-v3.md", "type": "behavior"},
+        {"text": "Reads vault CLAUDE.md to understand current state", "type": "behavior"},
+        {"text": "Reads MEMORY.md to understand current state", "type": "behavior"},
+        {"text": "Presents planned changes to user", "type": "output"},
+        {"text": "Does NOT use Edit tool (dry-run mode)", "type": "behavior"},
+        {"text": "Does NOT use Write tool (dry-run mode)", "type": "behavior"},
+        {"text": "Shows what would change in vault CLAUDE.md", "type": "output"},
+        {"text": "Shows what would change in MEMORY.md", "type": "output"}
+      ]
+    }
+  ]
+}
