@@ -90,12 +90,21 @@ summary: "One-line summary of what this document covers."
 
 ### Step 2.5: Preserve Raw Source
 
-Copy the original, unmodified source document into the vault's `raw/` directory. This creates an immutable archive that enables "recompile from source" if entity extraction or compilation needs to be re-run.
+Copy the original, unmodified source document into the vault's `raw/` directory. This creates an immutable archive that enables "recompile from source" if entity extraction or compilation needs to be re-run. This is the Karpathy LLM Wiki `raw/` pattern — **never modify files in `raw/`**.
 
+Invoke the canonical CLI — it handles directory creation, collision → date-prefix, and metadata preservation in one call:
+
+```bash
+cd .claude/scripts && uv run python entity_extractor.py preserve-raw "path/to/original-source.md" --vault-dir "path/to/vault"
+```
+
+The command prints the destination path on stdout (e.g., `path/to/vault/raw/original-source.md`, or on collision `path/to/vault/raw/2026-04-11-original-source.md`). Capture that path if you need to reference the archived copy later.
+
+**Semantics:**
 - Target: `{vault_root}/raw/{original-filename}`
-- If `raw/` doesn't exist, create it
-- The raw copy is **IMMUTABLE** — never modify files in `raw/`
-- If a file with the same name exists in `raw/`, prefix with today's date: `2026-04-06-EXISTING-NAME.md`
+- If a file with the same name already exists in `raw/`, the CLI falls back to `{YYYY-MM-DD}-{original-filename}` automatically
+- File metadata (mtime, permissions) is preserved via `shutil.copy2`
+- The source file is **never modified**
 - This step is quick — just a file copy, no analysis
 
 ### Step 3: Place the File
