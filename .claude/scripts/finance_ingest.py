@@ -116,7 +116,7 @@ def ingest_file(source: Path, category: str, dry_run: bool = False):
     # entity_extractor.preserve_raw (always_date_prefix=True matches the
     # legacy finance_ingest semantics: bank statements reuse names daily).
     if not dry_run:
-        raw_dest = preserve_raw(source, FINANCE_VAULT, always_date_prefix=True)
+        raw_dest = preserve_raw(source, FINANCE_VAULT, always_date_prefix=True, on_collision="skip")
         print(f"  [ok] Raw preserved -> raw/{raw_dest.name}")
     else:
         from datetime import date as _date
