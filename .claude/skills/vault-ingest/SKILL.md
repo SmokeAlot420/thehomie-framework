@@ -59,6 +59,22 @@ Read the source document(s). For each file, determine:
 
 For classification, scan existing vault notes to understand the neighborhood. Read the MOC files to see what topics are already organized.
 
+### Step 1.5: URL Input Detection (gap-4)
+
+If the input is a single `https?://...` URL, the **router** has already fetched and archived
+the content into `{vault}/raw/clipped/{YYYY-MM-DD}-{slug}.{html,md}` and the bot's reply was
+sent directly. The skill is NOT invoked for URL inputs — the router-side path bypasses LLM
+classification because URL fetch + compile is fully deterministic.
+
+If you ARE seeing a URL inside Claude Code (CLI / non-bot context), shell out to:
+
+```bash
+uv run python entity_extractor.py fetch-url <url> --vault-dir <vault> --memory-dir <memory>
+```
+
+and report the printed counts back to the user. Do not attempt to fetch in pure prompt — the
+fetcher needs `requests` + `trafilatura` (declared in `.claude/scripts/pyproject.toml`).
+
 ### Step 2: Generate Frontmatter
 
 Every ingested document gets YAML frontmatter. Generate it based on content analysis:
