@@ -113,7 +113,7 @@ Capture and display both push outputs. Confirm both succeeded.
 
 Summarize to the user:
 - Private: `old_sha..new_sha` on `github.com/thehomie-framework/thehomie`
-- Public: `old_sha..new_sha` on `github.com/thehomie-framework/thehomie-framework`
+- Public: `old_sha..new_sha` on `github.com/SmokeAlot420/thehomie-framework`
 - Files changed on public: N
 - Any denylist patches added during the run
 

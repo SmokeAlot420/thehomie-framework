@@ -2,7 +2,7 @@
 
 ## Repo Layout
 This is a **private** monorepo (`thehomie`). It has a sanitized public derivative at
-`thehomie-framework` (GitHub: thehomie-framework/thehomie-framework). The two repos are kept in sync
+`thehomie-framework` (GitHub: SmokeAlot420/thehomie-framework). The two repos are kept in sync
 via `scripts/sanitize.py` — a 5-layer sanitizer that explicitly blocks secrets, PIDs, personal
 data, and vault content from ever reaching the public repo.
 
