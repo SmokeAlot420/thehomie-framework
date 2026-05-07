@@ -275,6 +275,225 @@ def test_prd8_claude_agents_dir_denied() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# PRD-8 Phase 3 — dashboard slice sanitizer rules (WS5)
+# ---------------------------------------------------------------------------
+
+MC_PROFILE_CONTRACT_REL = "docs/mc-profile-contract.md"
+DASHBOARD_README_REL = "dashboard/README.md"
+DASHBOARD_OWNER_CHARTER_REL = ".claude/agents/dashboard-owner.md"
+
+
+def test_dist_dirs_denied_segment_aware() -> None:
+    """Dashboard build-artifact directories must be denied at any path depth.
+
+    The segment-aware match in ``is_denied()`` (the 6daef06 hardening)
+    means ``foo/dashboard/server/dist/...`` is also denied even though
+    only the canonical top-level path is configured. This regression-
+    gates that the segment matcher reaches into nested cases — Phase 3
+    introduces a new directory tree and we want to catch any near-miss
+    where a build copy ended up under another root.
+    """
+    cases = [
+        # canonical top-level
+        "dashboard/server/dist/index.js",
+        "dashboard/server/dist/middleware/auth.js",
+        "dashboard/web/dist/assets/index-abc123.js",
+        "dashboard/web/dist/index.html",
+        # nested (e.g. accidentally produced under another root)
+        "release/dashboard/server/dist/index.js",
+        "vendor/dashboard/web/dist/main.js",
+    ]
+    for path in cases:
+        assert sanitize.is_denied(path) is True, (
+            f"sanitizer FAILED to deny dashboard build artifact {path!r}. "
+            f"Expected catch by: DENY_DIRS 'dashboard/server/dist/' or "
+            f"'dashboard/web/dist/' (segment-aware). Build artifacts "
+            f"must never ship — bloat + possible bundled secrets."
+        )
+
+
+def test_node_modules_denied_segment_aware() -> None:
+    """Dashboard node_modules trees must be denied at any path depth.
+
+    Same segment-aware rationale as the dist test. ``node_modules/``
+    inside the dashboard slice should never ship — license violations
+    + bloat + the trees can hide secrets if a postinstall script wrote
+    one.
+    """
+    cases = [
+        "dashboard/server/node_modules/hono/package.json",
+        "dashboard/web/node_modules/preact/dist/preact.mjs",
+        # nested forms
+        "release/dashboard/server/node_modules/hono/index.js",
+        "vendor/dashboard/web/node_modules/preact/dist/preact.js",
+    ]
+    for path in cases:
+        assert sanitize.is_denied(path) is True, (
+            f"sanitizer FAILED to deny dashboard node_modules path {path!r}. "
+            f"Expected catch by: DENY_DIRS 'dashboard/server/node_modules/' "
+            f"or 'dashboard/web/node_modules/' (segment-aware)."
+        )
+
+
+def test_mc_profile_contract_doc_explicitly_included() -> None:
+    """The mc-profile-contract doc must NOT be denied. It lives under
+    ``docs/`` (in DENY_DIRS) but is surgically lifted via INCLUDE_FILES
+    because it is the public dashboard HTTP API contract.
+
+    Direct ``is_denied()`` call — proves the layered precedence (Layer
+    4 INCLUDE_FILES override of Layer 5 DENY_DIRS) is wired correctly
+    for the new entry.
+    """
+    assert sanitize.is_denied(MC_PROFILE_CONTRACT_REL) is False, (
+        f"sanitizer denied {MC_PROFILE_CONTRACT_REL!r} — public mirror "
+        f"will be missing the dashboard HTTP API contract. Check that "
+        f"INCLUDE_FILES in scripts/sanitize.py contains this path AND "
+        f"that DENY_FILES / DENY_EXTENSIONS / DENY_PATTERNS do not match it."
+    )
+
+
+def test_dashboard_readme_explicitly_included() -> None:
+    """The dashboard/README.md is NOT under DENY_DIRS today, so this
+    test is informational/defensive — it proves ``is_denied()`` returns
+    False even if a future operator accidentally adds ``dashboard/`` to
+    DENY_DIRS without simultaneously updating INCLUDE_FILES coverage.
+    """
+    assert sanitize.is_denied(DASHBOARD_README_REL) is False, (
+        f"sanitizer denied {DASHBOARD_README_REL!r} — public mirror "
+        f"will be missing the dashboard dev/build/route documentation. "
+        f"Check INCLUDE_FILES contains this path AND that nothing in "
+        f"DENY_FILES / DENY_EXTENSIONS / DENY_PATTERNS matches it."
+    )
+
+
+def test_dashboard_owner_charter_explicitly_included() -> None:
+    """The dashboard-owner charter currently STAYS DENIED.
+
+    .claude/agents/ is in DENY_DIRS — ``test_prd8_claude_agents_dir_denied``
+    locks this until CLUTCH ships publicly with explicit owner approval.
+    This test asserts the current locked state: dashboard-owner.md is
+    denied alongside the other domain-owner charters.
+
+    When CLUTCH adoption goes public and owner flips ``.claude/agents/``
+    out of DENY_DIRS, this test should be replaced (the file should
+    then be unconditionally allowed by the absence of a deny rule, not
+    by an INCLUDE_FILES surgical lift). For now: locked.
+    """
+    assert sanitize.is_denied(DASHBOARD_OWNER_CHARTER_REL) is True, (
+        f"sanitizer FAILED to deny {DASHBOARD_OWNER_CHARTER_REL!r}. "
+        f"Until CLUTCH ships publicly, .claude/agents/ stays in "
+        f"DENY_DIRS — see test_prd8_claude_agents_dir_denied for the "
+        f"locked-private rationale."
+    )
+
+
+def test_no_secrets_leak_through_dashboard_tree() -> None:
+    """Scan the dashboard/ source tree for hard-coded secret-shaped
+    strings. The dashboard source files DO ship publicly, so any
+    accidental hard-coded token, BotFather mention, or Anthropic key
+    pattern is a class-of-bug we catch at sanitizer-test time rather
+    than waiting for the post-export validate_output scan.
+
+    The scan is over the source tree on disk, not the post-export copy
+    — the goal is to fail fast in CI rather than only at full-export
+    time.
+    """
+    dashboard_root = REPO_ROOT / "dashboard"
+    if not dashboard_root.exists():
+        # Test runs in a checkout that pre-dates dashboard/ — skip silently.
+        # Once dashboard/ lands, this branch never trips.
+        return
+
+    # Patterns whose presence in dashboard/ source is a near-miss leak.
+    # Each pattern is something we have already seen attempted (real bot
+    # tokens), or something that has no business being hard-coded
+    # (Anthropic SDK keys, "BotFather" prose suggesting a how-to-leak).
+    suspicious_patterns: list[tuple[str, "re.Pattern[str]"]] = [
+        ("real telegram bot token", __import__("re").compile(
+            r"\b\d{9,12}:[A-Za-z0-9_-]{30,}\b"
+        )),
+        ("anthropic api key", __import__("re").compile(
+            r"sk-ant-[A-Za-z0-9_-]{20,}"
+        )),
+        ("openai api key", __import__("re").compile(
+            r"sk-proj-[A-Za-z0-9_-]{20,}"
+        )),
+        # Hard-coded user-token literal — anything assigning a long string
+        # to a name like ``bot_token`` / ``BOT_TOKEN`` is a smell.
+        ("hardcoded bot_token assignment", __import__("re").compile(
+            r"""(?im)\bbot_token\s*[:=]\s*["'][A-Za-z0-9_:-]{20,}["']"""
+        )),
+    ]
+
+    failures: list[str] = []
+    skip_dirs = {"node_modules", "dist", "__tests__"}
+    skip_suffixes = {".lock", ".log"}
+
+    for path in dashboard_root.rglob("*"):
+        if not path.is_file():
+            continue
+        # Skip build artifacts + dep trees + test fixtures (tests may
+        # legitimately use throwaway tokens for validation).
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        if path.suffix in skip_suffixes:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        for label, pat in suspicious_patterns:
+            for m in pat.finditer(content):
+                failures.append(
+                    f"{path.relative_to(REPO_ROOT)} — {label!r} matched: "
+                    f"{m.group(0)[:80]!r}"
+                )
+
+    assert not failures, (
+        "sanitizer dashboard-tree scan found near-miss leak shapes — each "
+        "is a hard-coded value that should be an env-var lookup or test "
+        "fixture under __tests__/:\n"
+        + "\n".join(f"  - {f}" for f in failures)
+    )
+
+
+def test_dashboard_server_src_files_pass_through_to_public() -> None:
+    """Positive control: legitimate dashboard source code MUST pass
+    ``is_denied()`` (False = allowed). This test catches the
+    false-deny class-of-bug where a future restructure of DENY_DIRS
+    accidentally swallows dashboard/server/src/ or dashboard/web/src/.
+    """
+    legitimate_paths = [
+        "dashboard/server/src/index.ts",
+        "dashboard/server/src/translate.ts",
+        "dashboard/server/src/auth-policy.ts",
+        "dashboard/server/src/framework-client.ts",
+        "dashboard/server/src/middleware/auth.ts",
+        "dashboard/server/src/middleware/csrf.ts",
+        "dashboard/server/src/routes/agents.ts",
+        "dashboard/server/src/routes/conversation.ts",
+        "dashboard/server/package.json",
+        "dashboard/web/src/App.tsx",
+        "dashboard/web/src/main.tsx",
+        "dashboard/web/src/pages/Agents.tsx",
+        "dashboard/web/src/components/Sidebar.tsx",
+        "dashboard/web/package.json",
+        "dashboard/web/vite.config.ts",
+        "dashboard/web/tsconfig.json",
+    ]
+    failures: list[str] = []
+    for path in legitimate_paths:
+        if sanitize.is_denied(path) is True:
+            failures.append(path)
+    assert not failures, (
+        f"sanitizer falsely denied legitimate dashboard source files: "
+        f"{failures!r}. Source under dashboard/server/src/ and "
+        f"dashboard/web/src/ MUST ship publicly — only dist/ and "
+        f"node_modules/ are denied."
+    )
+
+
 def test_prp7_dynamic_lock_pid_scan() -> None:
     """Dynamic regression: every currently-tracked .lock or .pid file
     must be denied. Catches future operator mistakes where a new
