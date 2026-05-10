@@ -84,6 +84,64 @@ def test_phase5_archon_template_tracked_by_git() -> None:
 # ---------------------------------------------------------------------------
 
 PAPERCLIP_SEAM_REL = "docs/paperclip-seam.md"
+# PRD-8 Phase 6 — public cabinet voice setup guide. Same surgical-lift
+# discipline as paperclip-seam.md: lives under docs/ (DENY_DIRS) so an
+# explicit INCLUDE_FILES allowlist + on-disk + tracked checks prove the
+# doc actually ships.
+CABINET_VOICE_SETUP_REL = "docs/cabinet-voice-setup.md"
+
+
+def test_cabinet_voice_setup_in_allowlist() -> None:
+    """sanitize.INCLUDE_FILES contains the public cabinet voice setup doc.
+
+    Phase 6 contract criterion ``sanitize_include_files_allowlist_extended``.
+    Catches the regression where someone removes the entry but forgets to
+    delete the doc — the public export would silently drop it.
+    """
+    assert CABINET_VOICE_SETUP_REL in sanitize.INCLUDE_FILES, (
+        f"sanitize.INCLUDE_FILES must include {CABINET_VOICE_SETUP_REL!r} so "
+        f"the public mirror ships the cabinet voice setup guide. Found "
+        f"INCLUDE_FILES = {sanitize.INCLUDE_FILES}"
+    )
+
+
+def test_cabinet_voice_setup_survives_sanitize() -> None:
+    """is_denied() returns False for the public cabinet voice doc.
+
+    Phase 6 contract criterion ``sanitize_regression_test_added``. Locks
+    the layered precedence so DENY_DIRS matching ``docs/`` is overridden
+    by the surgical INCLUDE_FILES lift.
+    """
+    assert sanitize.is_denied(CABINET_VOICE_SETUP_REL) is False, (
+        f"sanitizer denied {CABINET_VOICE_SETUP_REL!r} — public mirror will "
+        f"be missing the cabinet voice setup guide. Check INCLUDE_FILES + "
+        f"DENY_FILES + DENY_PATTERNS layering."
+    )
+
+
+def test_cabinet_voice_setup_doc_present_on_disk() -> None:
+    """The cabinet voice setup doc must exist on disk."""
+    asset = REPO_ROOT / CABINET_VOICE_SETUP_REL
+    assert asset.is_file(), (
+        f"Cabinet voice setup doc missing at {asset}. PRD-8 Phase 6 must "
+        f"create this file."
+    )
+
+
+def test_cabinet_voice_setup_doc_no_personal_refs() -> None:
+    """Public doc must not leak YourBusiness / owner-specific references.
+
+    Phase 6 contract criterion ``public_docs_cabinet_voice_setup_exists``.
+    The private vault note ``vault/memory/concepts/CABINET-VOICE-SETUP.md``
+    carries YourBusiness context separately.
+    """
+    asset = REPO_ROOT / CABINET_VOICE_SETUP_REL
+    if not asset.is_file():
+        pytest.skip("setup doc not present")
+    content = asset.read_text(encoding="utf-8")
+    forbidden = ["YourBusiness", "YourBusiness", "owner", "lastname"]
+    bad: list[str] = [term for term in forbidden if term in content]
+    assert not bad, f"Public docs/cabinet-voice-setup.md contains personal refs: {bad}"
 
 
 def test_prp7_paperclip_seam_doc_included() -> None:
@@ -809,4 +867,125 @@ def test_phase7a_field_name_key_not_redacted() -> None:
     from security.patterns import contains_leak_pattern
     sample = '{"key-name": "value"}'
     assert not contains_leak_pattern(sample)
+
+
+# === PRD-8 Phase 6 v2 fix-pass 2026-05-10 — B-LEAK regression tests ===
+#
+# B-LEAK-2 incident (2026-05-10): the legacy `\bowner\b` REPLACEMENTS
+# pattern did NOT fire across `_` because `_` is `\w`, so identifier
+# fixtures like `v_owner_unused` and `_owner_VOICE` slipped through both
+# the REPLACEMENTS pass AND the LEAK_PATTERNS validator. Verifier returned
+# "zero leaks" while the literal shipped publicly.
+#
+# B-LEAK-1 incident (same review): a real Nestor ElevenLabs voice clone id
+# (`VOICE_ID_EXAMPLE`) was hard-coded into the public docs page and
+# the test fixtures. The sanitizer had no prefix-shape coverage for raw
+# 20-char ElevenLabs voice ids.
+#
+# Both classes are now defended at REPLACEMENTS + LEAK_PATTERNS layers.
+# Rule: feedback_sanitizer_regex_shape_blind_spot.md.
+
+
+def test_sanitizer_owner_substring_through_underscore() -> None:
+    """B-LEAK-2 — bare-substring `owner` REPLACEMENTS scrubs identifier
+    fixtures where `_` blocks word-boundary matching.
+
+    Class-of-bug: ``re.compile(r"\\bowner\\b", re.IGNORECASE)`` does NOT
+    match `owner` inside `v_owner_unused` or `_owner_VOICE` because `_`
+    is `\\w`. The fix relaxes REPLACEMENTS to bare substring; this test
+    locks the fix.
+    """
+    sample = (
+        "voice_overrides={\"elevenlabs\": \"v_owner_unused\"}\n"
+        "OVERRIDE_KEY = \"_owner_VOICE\"\n"
+        "if user == \"owner\":  # explicit lower-case still hits\n"
+    )
+    out = sanitize.scrub_content(sample, "test_voice_overrides.py")
+    assert "owner" not in out.lower(), (
+        f"REPLACEMENTS failed to scrub `owner` substring across `_` boundaries. "
+        f"Output still contains owner:\n{out!r}"
+    )
+
+
+def test_sanitizer_owner_substring_in_leak_patterns() -> None:
+    """B-LEAK-2 — LEAK_PATTERNS double-pass also catches bare-substring
+    `owner` so a future regression where a new file slips past
+    REPLACEMENTS still fails the post-export validator."""
+    pat_strs = [p.pattern for p in sanitize.LEAK_PATTERNS]
+    assert any(p == "owner" for p in pat_strs), (
+        f"LEAK_PATTERNS missing bare-substring `owner` validator. "
+        f"Found: {pat_strs!r}"
+    )
+
+
+def test_sanitizer_lastname_substring_through_email_compound() -> None:
+    """B-LEAK-3 — bare-substring `lastname` REPLACEMENTS scrubs the surname
+    when embedded inside an email local-part compound that survived the
+    `owner` scrub.
+
+    Class-of-bug: prior LEAK_PATTERNS only checked the two-word phrases
+    ``lastname owner`` / ``owner lastname``. After the B-LEAK-2 `owner` fix,
+    `owner6392lastname@gmail.com` scrubs to `owner6392lastname@gmail.com` —
+    the surname survived because no rule fired on the bare token. This
+    test locks the bare-substring fix.
+    """
+    sample = (
+        '# Personal Gmail (owner6392lastname@gmail.com — read-only)\n'
+        'PERSONAL_GMAIL_ACCOUNT = "owner6392lastname@gmail.com"\n'
+    )
+    out = sanitize.scrub_content(sample, "config.py")
+    assert "lastname" not in out.lower(), (
+        f"REPLACEMENTS failed to scrub bare-substring `lastname` from email "
+        f"compound. Output still contains lastname:\n{out!r}"
+    )
+
+
+def test_sanitizer_lastname_substring_in_leak_patterns() -> None:
+    """B-LEAK-3 — LEAK_PATTERNS double-pass catches bare-substring
+    `lastname` so a future regression fails validate_output instead of
+    shipping silently."""
+    pat_strs = [p.pattern for p in sanitize.LEAK_PATTERNS]
+    assert any(p == "lastname" for p in pat_strs), (
+        f"LEAK_PATTERNS missing bare-substring `lastname` validator. "
+        f"Found: {pat_strs!r}"
+    )
+
+
+def test_sanitizer_nestor_voice_id_replacements() -> None:
+    """B-LEAK-1 — Nestor ElevenLabs voice clone id literal scrubs to
+    placeholder via REPLACEMENTS. Defense-in-depth on top of the
+    source-level placeholder."""
+    sample = 'voice_id: "VOICE_ID_EXAMPLE"\n'
+    out = sanitize.scrub_content(sample, "docs/cabinet-voice-setup.md")
+    assert "VOICE_ID_EXAMPLE" not in out, (
+        f"REPLACEMENTS failed to scrub the Nestor voice id literal. "
+        f"Output:\n{out!r}"
+    )
+
+
+def test_sanitizer_nestor_voice_id_in_leak_patterns() -> None:
+    """B-LEAK-1 — LEAK_PATTERNS double-pass catches a future regression
+    where the Nestor voice id literal slips back into source."""
+    matched = False
+    for p in sanitize.LEAK_PATTERNS:
+        if "VOICE_ID_EXAMPLE" in p.pattern:
+            matched = True
+            break
+    assert matched, (
+        f"LEAK_PATTERNS missing Nestor voice id validator. "
+        f"Patterns: {[p.pattern for p in sanitize.LEAK_PATTERNS]!r}"
+    )
+
+
+def test_sanitizer_nestor_voice_id_case_insensitive_replacements() -> None:
+    """B-LEAK-1 — REPLACEMENTS scrubs lowercase typo variant
+    `VOICE_ID_EXAMPLE` (legacy test_persona_config_loader.py fixture).
+    Same-class leak — first letter typo doesn't change the identifier
+    semantics."""
+    sample = 'voice_id: "VOICE_ID_EXAMPLE"\n'
+    out = sanitize.scrub_content(sample, "test_persona_config_loader.py")
+    assert "l0R3QvM8Xa45lGiK8sL" not in out, (
+        f"REPLACEMENTS failed to scrub lowercase typo of Nestor voice id. "
+        f"Output:\n{out!r}"
+    )
 

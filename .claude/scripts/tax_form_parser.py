@@ -59,7 +59,7 @@ ENTITY_PATTERNS = {
     "city_state":       r"(San Marcos, CA \d+)",
     "date_started":     r"(\d{2}/\d{2}/\d{4})",
     "partner_name_oscar": r"(the operator\s+Rosas)",
-    "partner_name_pedro": r"(owner\s+[A-Z])",
+    "partner_name_owner": r"(owner\s+[A-Z])",
     "tax_year":         r"calendar year (\d{4})",
     "num_partners":     r"Number of Schedules K-1[^0-9]+(\d+)",
     "accounting_method": r"Cash",
