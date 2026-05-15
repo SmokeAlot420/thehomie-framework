@@ -654,7 +654,7 @@ def test_phase7a_pk_live_caught() -> None:
     assert contains_leak_pattern("pk_live_" + "x" * 24)
 
 
-def test_phase7a_<REDACTED-elevenlabs>() -> None:
+def test_phase7a_sk_elevenlabs_caught() -> None:
     from security.patterns import contains_leak_pattern
     assert contains_leak_pattern("sk_" + "x" * 24)
 
@@ -772,19 +772,19 @@ def test_phase7a_pcp_postmark_caught() -> None:
 # === Replacement-ordering regressions (R1 B3 — most-specific wins) ===
 
 
-def test_phase7a_replacement_<REDACTED-elevenlabs>() -> None:
+def test_phase7a_replacement_sk_ant_labels_anthropic_not_openai() -> None:
     """sk-ant-xxxx scrubs to <REDACTED-anthropic>, NOT <REDACTED-openai>."""
     out = sanitize.scrub_content("token=sk-ant-" + "x" * 30, "x.md")
     assert "<REDACTED-anthropic>" in out
     assert "<REDACTED-openai>" not in out
 
 
-def test_phase7a_replacement_<REDACTED-elevenlabs>() -> None:
+def test_phase7a_replacement_sk_proj_labels_openai_not_generic() -> None:
     out = sanitize.scrub_content("token=sk-proj-" + "x" * 30, "x.md")
     assert "<REDACTED-openai>" in out
 
 
-def test_phase7a_replacement_<REDACTED-stripe>() -> None:
+def test_phase7a_replacement_sk_live_labels_stripe_not_elevenlabs() -> None:
     """sk_live_xxxx labeled stripe (sk_live_ prefix wins over sk_ via length-desc)."""
     out = sanitize.scrub_content("k=sk_live_" + "x" * 30, "x.md")
     assert "<REDACTED-stripe>" in out
@@ -819,6 +819,19 @@ def test_phase7a_replacement_aiza_labels_google() -> None:
 def test_phase7a_replacement_eyj_labels_jwt() -> None:
     out = sanitize.scrub_content("token=eyJ" + "x" * 30, "x.md")
     assert "<REDACTED-jwt>" in out
+
+
+def test_phase7a_replacement_does_not_scrub_identifier_with_sk_prefix() -> None:
+    sample = "def test_task_name_and_prompt_always_present() -> None:\n    pass\n"
+    out = sanitize.scrub_content(sample, "test_prompt_builder.py")
+    assert "test_task_name_and_prompt_always_present" in out
+    assert "<REDACTED-elevenlabs>" not in out
+
+
+def test_phase7a_leak_patterns_ignore_identifier_with_sk_prefix() -> None:
+    from security.patterns import contains_leak_pattern
+
+    assert contains_leak_pattern("test_task_name_and_prompt_always_present") is False
 
 
 # === DENY layer regressions ===

@@ -15500,7 +15500,7 @@ function TaskItem({ item }) {
     };
     const checked = item.status !== " ";
     return (y$1("li", { class: "dataview task-list-item" + (checked ? " is-checked" : ""), onClick: onClicked, "data-task": item.status },
-        y$1("input", { class: "dataview ta<REDACTED-openai>", type: "checkbox", checked: checked, onClick: onChecked }),
+        y$1("input", { class: "dataview task-list-item-checkbox", type: "checkbox", checked: checked, onClick: onChecked }),
         y$1(Markdown, { inline: true, content: item.visual ?? item.text, sourcePath: item.path }),
         item.children.length > 0 && y$1(TaskList, { items: item.children })));
 }
