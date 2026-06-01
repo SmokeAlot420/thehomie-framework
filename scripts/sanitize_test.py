@@ -90,6 +90,12 @@ PAPERCLIP_SEAM_REL = "docs/paperclip-seam.md"
 # doc actually ships.
 CABINET_VOICE_SETUP_REL = "docs/cabinet-voice-setup.md"
 BROWSEROPS_MANUAL_REL = "docs/browserops-agent-browser-manual.md"
+MANUAL_DOC_RELS = tuple(
+    sorted(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "docs" / "manual").rglob("*.md")
+    )
+)
 
 
 def test_cabinet_voice_setup_in_allowlist() -> None:
@@ -185,6 +191,68 @@ def test_browserops_manual_doc_no_personal_refs() -> None:
     ]
     bad: list[str] = [term for term in forbidden if term in content]
     assert not bad, f"Public docs/browserops-agent-browser-manual.md contains private refs: {bad}"
+
+
+def test_manual_docs_in_allowlist() -> None:
+    """Every manual page must be surgically lifted into the public export."""
+    assert MANUAL_DOC_RELS, "No docs/manual markdown files found"
+    missing = [path for path in MANUAL_DOC_RELS if path not in sanitize.INCLUDE_FILES]
+    assert not missing, (
+        f"docs/manual files missing from sanitize.INCLUDE_FILES: {missing!r}. "
+        "Keep the allowlist exact; do not broaden docs/."
+    )
+
+
+def test_manual_docs_survive_sanitize() -> None:
+    """The public manual lives under denied docs/, so each page must pass is_denied."""
+    denied = [path for path in MANUAL_DOC_RELS if sanitize.is_denied(path)]
+    assert not denied, (
+        f"sanitizer denied public manual pages: {denied!r}. Check "
+        "INCLUDE_FILES plus DENY_FILES / DENY_EXTENSIONS / DENY_PATTERNS."
+    )
+
+
+def test_manual_docs_scrub_private_refs() -> None:
+    """Manual pages should be public-safe after sanitizer replacements."""
+    forbidden = [
+        "YourBusiness",
+        "YourBusiness",
+        "owner",
+        "lastname",
+        "YourAgent",
+        "@YourBot",
+        "C:\\Users\\YourUser",
+        "C:/Users/YourUser",
+        "100.x.y.z",
+        "your-tailnet",
+        "YOUR_TELEGRAM_ID",
+        "thehomie",
+    ]
+    bad: list[str] = []
+    for rel in MANUAL_DOC_RELS:
+        content = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        public_content = sanitize.scrub_content(content, rel)
+        for term in forbidden:
+            if term in public_content:
+                bad.append(f"{rel}: {term}")
+
+    assert not bad, f"Public docs/manual output contains private refs: {bad}"
+
+
+def test_sanitizer_tailscale_mobile_access_replacements() -> None:
+    sample = "Phone URL: http://100.x.y.z:5173/mobile via your-tailnet.ts.net"
+    out = sanitize.scrub_content(sample, "docs/manual/README.md")
+
+    assert "100.x.y.z" not in out
+    assert "your-tailnet" not in out
+    assert "100.x.y.z" in out
+    assert "your-tailnet.ts.net" in out
+
+
+def test_sanitizer_tailscale_mobile_access_in_leak_patterns() -> None:
+    samples = ["100.x.y.z", "your-tailnet", "your-tailnet.ts.net"]
+    for sample in samples:
+        assert any(pattern.search(sample) for pattern in sanitize.LEAK_PATTERNS)
 
 
 def test_prp7_paperclip_seam_doc_included() -> None:
