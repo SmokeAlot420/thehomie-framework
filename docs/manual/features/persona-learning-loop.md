@@ -2,12 +2,15 @@
 
 Status: Shipped — born learning per profile (#422, 2026-08-13)
 Owner: Framework (memory pipelines + personas)
-Last updated: 2026-08-13
+Last updated: 2026-09-06
 
 The [Autonomous Persona Harness Learning](persona-harness-learning.md) extension
 adds expectations, observable outcomes, held-out evaluation, automatic method
 adoption, versioned future use, and reassessment. Its Learning tab and CLI expose
 that evidence separately from this existing reflection and belief pipeline.
+This chapter documents the legacy reflection path; its eligibility rules differ
+from the harness defaults described below. For producer and runtime integration,
+see the [harness developer guide](persona-harness-learning-developer.md).
 
 ## What It Does
 
@@ -309,7 +312,9 @@ to misuse.
 | Command | What it does |
 |---|---|
 | `thehomie profile learning enable <name>` | Turn learning back on for a persona that was disabled (strict-read RMW of `config.yaml`). Creates a JSONL audit row. Also the migration verb for pre-#422 profiles. |
-| `thehomie profile learning disable <name>` | The per-persona off switch. Existing beliefs are preserved but no new extraction runs. |
+| `thehomie profile learning disable <name>` | Writes `learning.enabled: false`, making the persona ineligible for scheduled reflection and disabling its harness learning. Existing beliefs and applied methods remain. |
+| `thehomie profile learning pause <name>` / `resume <name>` | Pause/resume the harness only. Pause suppresses new harness capture, learned-context injection, and background work; it does not disable legacy reflection or remove applied skills/amendments. Resume preserves an explicit config disable. |
+| `thehomie profile learning rollback <name> <activation-id>` | Retire an adopted harness method through its recorded activation. Use this to undo a method; pause does not undo it. |
 
 ### A persona is born learning (#422)
 
@@ -330,13 +335,21 @@ Two switches still turn it off, and neither was weakened:
   switch. It survives `profile blueprint reconcile` (reconcile never touches
   the `learning` key), so a deliberate disable is not silently undone.
 
-**Pre-existing profiles are unchanged.** Absent-key semantics still mean OFF —
+**Legacy reflection still requires explicit eligibility.**
 `is_learning_eligible` reads a missing or malformed `learning` block as
-ineligible — and #422 shipped no migration that rewrites old configs. The 28
+ineligible, and #422 shipped no migration that rewrites old configs. The 28
 profiles that existed before it were switched on separately, through the
 audited `thehomie profile learning enable` CLI on 2026-08-12; each has its own
-audit row. A profile created before #422 and never touched is still OFF until
-an operator enables it.
+audit row. A profile created before #422 and never touched remains ineligible
+for this reflection tick until an operator enables it.
+
+**The v1.8.0 harness defaults on for valid default and named profiles.** An
+absent `learning` section or `enabled` key means enabled there; explicit
+`learning.enabled: false` is preserved, and malformed harness configuration
+reports an error. Harness availability therefore does not imply that the legacy
+reflection tick admitted that profile. Its separate pause state preserves all
+records and already applied content. See the
+[harness operator guide](persona-harness-learning.md) for current controls.
 
 One transient side effect on those old profiles: `memory/experience/` joined
 the required inventory in #422, so `profile list` / `/diagnostics` report
@@ -379,7 +392,7 @@ Resolved at call time via `get_persona_notes_settings()` in `config.py`
 
 | Config path | Value on a new profile | Value when the key is absent | Meaning |
 |---|---|---|---|
-| `<profile>/config.yaml → learning.enabled` | `true` (written at creation, #422) | ineligible (absent = OFF, unchanged) | Per-persona learning switch. Read at call time via `load_persona_config(name)`; admission decided by `persona_learning_tick.is_learning_eligible`. Written via `set_persona_learning()` (strict-read RMW) on the clone door and the operator toggle, or folded into the atomic transaction on the blueprint door. |
+| `<profile>/config.yaml → learning.enabled` | `true` (written at creation, #422) | legacy reflection: ineligible; harness: enabled | Shared config switch with separate admission defaults. Legacy reflection uses `persona_learning_tick.is_learning_eligible`; the harness uses `LearningService.enabled()`. Explicit `false` disables both. Written through the audited profile configuration helpers. |
 
 ### Inherited knobs
 
@@ -393,6 +406,16 @@ Persona reflection inherits the existing Living Self knobs:
   `INFERENCE_EXTRACTION_MIN_CHARS` (see the Living Self manual §8).
 - **Contradiction knobs** — the nightly contradiction pass runs unchanged
   against each persona's own belief set.
+
+## Harness Work On The Existing Schedule
+
+The reflection and dream entrypoints also wake the harness queue after their
+ordinary work. The install-wide persona ticks and heartbeat can drain pending
+profiles through bootstrapped child processes. No new cron entry or second
+reflection loop is registered. The harness uses one installation-wide learner
+lease, checks foreground activity, and yields at stage/evaluation checkpoints.
+Test mode skips harness queue work before discovery, writes, or model calls;
+this does not change the existing reflection test-mode contract above.
 
 ## Corpus Bounds
 

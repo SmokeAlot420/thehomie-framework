@@ -71,7 +71,7 @@ def learning_show(name: str, record_id: str, json_mode: bool) -> None:
 @click.argument("name", default="default")
 @click.option("--json", "json_mode", is_flag=True)
 def learning_pause(name: str, json_mode: bool) -> None:
-    """Pause background learning without deleting learned methods."""
+    """Pause harness capture, context delivery, and worker activity; keep applied methods."""
     _output(lambda: operator.get_learning_operator(name).set_paused(True), json_mode)
 
 
@@ -79,7 +79,7 @@ def learning_pause(name: str, json_mode: bool) -> None:
 @click.argument("name", default="default")
 @click.option("--json", "json_mode", is_flag=True)
 def learning_resume(name: str, json_mode: bool) -> None:
-    """Resume background learning; preserve explicit configuration disables."""
+    """Resume harness learning; preserve explicit configuration disables."""
     _output(lambda: operator.get_learning_operator(name).set_paused(False), json_mode)
 
 

@@ -25,7 +25,7 @@ capability shipped to the main homie is a gap on every persona until ported.
 Learning grants MEMORY, never capabilities — every external-mutation gate is
 untouched by this system.
 
-## The loop (what happens, end to end)
+## The foundation: experience, reflection, and dream
 
 ```
 create persona ──► BORN LEARNING (config written at every creation door)
@@ -58,6 +58,38 @@ persona_dream_tick  →  memory_dream.py -p <name>  per persona
       thehomie persona ingest <name> <file|text>  (articles/text → experience notes)
 ```
 
+## The Harness Learning Cycle (v1.8.0)
+
+The [harness operator guide](persona-harness-learning.md) covers the additional
+loop that tests proposed improvements and follows their later use. Both the
+default Homie and named personas use the same Python-owned lifecycle:
+
+```text
+relevant learned methods enter the next turn
+  -> expectation before a meaningful action
+  -> actual execution and later observations
+  -> conditional knowledge, self-model, or procedure candidate
+  -> frozen paired evaluation on held-out cases
+  -> provisional adoption through versioned skills/amendments
+  -> executed-context receipt on later work
+  -> subsequent outcomes, revision, or rollback
+```
+
+Each link has a separate record. A missing expectation stays missing; a completed
+runtime call does not establish a business outcome. Practice qualification can
+support provisional use, while absent real outcomes remain unknown. Later
+counterevidence can retire a method and prompt a revision. The
+[harness developer guide](persona-harness-learning-developer.md) explains the
+shared hooks and domain evidence collectors.
+
+New profiles still write `learning.enabled: true`. For older valid profiles,
+legacy reflection requires that explicit eligibility; the harness defaults on
+when the section or key is absent. Explicit `false` disables both. Harness pause
+suppresses new harness capture, dynamic context, and worker activity while
+preserving its history and any already applied skills/amendments. It does not
+pause legacy reflection. Rollback is the separate operation that retires an
+adopted method.
+
 ## What runs when (scheduled inventory)
 
 | Job | Cadence | Silent path | State |
@@ -66,6 +98,7 @@ persona_dream_tick  →  memory_dream.py -p <name>  per persona
 | `persona_learning_tick.py` | scheduled (12h recency guard) | `PERSONA_REFLECT_SILENT` (no chat rows AND no fresh notes) | `persona-learning-<name>-state.json` (main STATE_DIR); `last_attempt`/`last_run` split |
 | `persona_dream_tick.py` | nightly after the main dream | `DREAM_SILENT` per persona (zero LLM) | fan-out stamps in main STATE_DIR; each persona's `dream-state.json` in ITS profile tree |
 | Curriculum tick | per-persona cadence | disabled curricula skipped free | curriculum ledger per profile |
+| Harness worker | existing heartbeat, reflection, and dream seams; no new cron | no queued work, disabled/paused target, or foreground activity defers learning | `<profile data>/learning/learning.db` plus installation-wide activity/learner leases |
 
 ## Apartments — main reads across persona vaults (issue #466)
 
@@ -176,7 +209,10 @@ router picks a carrier lane or the turn refuses loudly.
 | Command | What it does |
 |---|---|
 | `thehomie profile create <name>` (any door: CLI, dashboard, blueprint) | newborn is BORN learning (`learning: {enabled: true}` + audit row + `memory/experience/` dir). Sentinel names (`default`, `custom`) are rejected at every door. |
-| `thehomie profile learning disable <name>` | surgical per-persona off (debugging only — not part of any product flow) |
+| `thehomie profile learning disable <name>` | Set the shared config switch false for legacy reflection and harness learning; preserve existing content. |
+| `thehomie profile learning summary [name] --json` | Inspect harness counts, active methods, context coverage, and queue state; omitted name selects default. |
+| `thehomie profile learning pause [name]` / `resume [name]` | Pause/resume the harness without removing applied methods or overriding an explicit config disable. |
+| `thehomie profile learning rollback <name> <activation-id>` | Retire the selected adopted method through its recorded activation. |
 | `/curriculum learn <url> [persona=<id>]` · `@<persona> learn <url>` | drop one YouTube link into the persona's curriculum study pipeline (operator-role-gated, pre-admitted, hostile-transcript wrapping intact) |
 | `thehomie persona ingest <name> <file\|text>` | drop an article/text into the persona's experience notes (reindexed; distilled that night) |
 | `uv run python persona_learning_tick.py --test` / `--once` | dry-run / single-persona tick |
@@ -189,7 +225,8 @@ router picks a carrier lane or the turn refuses loudly.
 
 | Switch | Scope |
 |---|---|
-| `PERSONA_LEARNING_ENABLED=false` | the whole learning tick family |
+| `PERSONA_LEARNING_ENABLED=false` | legacy persona learning ticks and harness learning |
+| `HOMIE_KILLSWITCH_HARNESS_LEARNING=disabled` | harness capture, dynamic context, and background learning |
 | `HOMIE_KILLSWITCH_BELIEF_AUTONOMY=disabled` | dream Phase-5 belief adoption — PROPAGATES to persona dream children (the whole `HOMIE_KILLSWITCH_*` class is threaded into spawned children) |
 | `HOMIE_KILLSWITCH_PERSONA_CURRICULUM=disabled` | all curriculum discovery/study incl. learn drops |
 | per-persona `learning.enabled: false` | one persona, surgical |
@@ -200,9 +237,10 @@ Corpus caps, note caps, and window knobs are call-time resolved — see
 
 ## Security invariants (load-bearing — do not weaken)
 
-- **Provenance**: every persona-sourced belief/lesson is `source="reflection"`
-  by host construction; nothing a persona reads can mint a sacrosanct
-  `explicit` belief.
+- **Provenance**: the reflection pipeline forces its persona-sourced
+  beliefs/lessons to `source="reflection"`. Harness source observations and
+  qualifications retain their own typed evidence records; neither mechanism
+  lets a persona's reading mint a protected `explicit` belief.
 - **Confinement**: the notes distiller is a NO-TOOLS structured call
   (`model_only` + `disallowed_tools=["*"]`, profile-root cwd, capable-lane
   fallback); the HOST applies amendments, policy-constrained to the persona's
@@ -230,9 +268,17 @@ Corpus caps, note caps, and window knobs are call-time resolved — see
 4. **Dream receipts**: each persona's `dream-state.json` shows `consolidated`
    or an honest `DREAM_SILENT` with a spawn-fresh receipt (truth-tabled — a
    stale or missing receipt never reports success).
-5. **Compounding proof (the point of it all)**: a work deliverable that
-   references a prior note/lesson — the worktick prompt carries the recall
-   block; check a draft's content against the persona's earlier notes.
+5. **Qualified change**: inspect a harness candidate's supporting and
+   counterevidence, paired evaluation, and activation. A saved lesson or a
+   model's confidence alone does not establish improvement.
+6. **Actual use**: follow the activation/version to a later `executed` context
+   receipt with its real model/provider. `prepared` and `submitted` receipts
+   show assembly and attempts, not completed use; confirm the resulting work
+   as well.
+7. **Outcome and reassessment**: follow that experience to a subsequent
+   observation and any revision or rollback. Keep absent outcomes unknown.
+   The full chain can show whether a tested method helped in those cases;
+   it does not by itself establish durable improvement across the domain.
 
 ## Watch items (post-ship)
 
@@ -252,6 +298,8 @@ land with #427/#428/#429.
 
 ## Detailed pages
 
+- [Persona Harness Learning](persona-harness-learning.md) — operate the full evidence-to-adoption loop
+- [Harness Developer Guide](persona-harness-learning-developer.md) — extend shared hooks and domain producers
 - [Persona Experience Notes](persona-experience-notes.md) — the writer, caps, receipts
 - [Persona Learning Loop](persona-learning-loop.md) — the tick, the composed gate, the distiller
 - [Persona Memory Isolation](persona-memory-isolation.md) — trees, indexes, recall binding

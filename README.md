@@ -163,6 +163,8 @@ thehomie team list               # Inspect team sessions
 | [Install Guide](INSTALL.md) | Prerequisites, setup wizard, channel credentials, Docker, systemd, vault setup |
 | [Talk Mode Showcase](docs/talk-mode-showcase.md) | Give your AI a real-time voice co-founder — architecture, the battle-tested receive pipeline, build-your-own guide |
 | [Operator Manual](docs/manual/README.md) | Public feature map, source-of-truth files, operator entry points, tests, proof boundaries |
+| [Persona Harness Learning](docs/manual/features/persona-harness-learning.md) | Daily learning operations, evidence, defaults, pause/resume, rollback, and troubleshooting |
+| [Learning Developer Guide](docs/manual/features/persona-harness-learning-developer.md) | Existing lifecycle hooks, domain evidence integration, and isolated executable examples |
 | [Desktop v0](docs/manual/features/desktop-v0.md) | Dashboard-first Electron app, portable/package smoke proof, Desktop/Hono/Python lifecycle |
 | [Multi-Channel Adapters](docs/manual/features/multi-channel-adapters.md) | Telegram attachments, grouped documents, quick-turn batching, Queue/Steer controls |
 | [Runtime Status And Model Control](docs/manual/features/runtime-status-model-control.md) | `/provider`, `/model`, lane-first runtime behavior, quiet JSON contract |

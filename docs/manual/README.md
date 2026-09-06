@@ -30,7 +30,11 @@ machine-specific proof artifacts stay outside the public manual.
 7. Read [Heartbeat Runtime](features/heartbeat-runtime.md) before changing
    proactive background reasoning, heartbeat model overrides, or scheduler
    behavior.
-8. Maintainers implementing architecture work should read
+8. Use [Persona Harness Learning](features/persona-harness-learning.md) to inspect
+   learning, follow evidence, pause/resume, and roll back a method. Developers
+   adding a surface or domain should then read the
+   [integration guide](features/persona-harness-learning-developer.md).
+9. Maintainers implementing architecture work should read
    [Polish Architecture And Execution Program](features/polish-architecture-execution-program.md)
    for the normative-spec/evidence distinction and bounded PRP gates. Then read
    [Amendment-Aware Rollback](features/amendment-aware-rollback.md) for the
@@ -84,9 +88,10 @@ orchestration, and thin channel/desktop surfaces over one runtime. Use
 | Persona Capability Elevation | One exact out-of-scope tool call after authenticated operator approval | [persona-capability-elevation](features/persona-capability-elevation.md) | Discord/Telegram Approve once, `approve capability <code>` |
 | Persona Tool Calling | Codex/Claude/Kimi scoped caller-tool parity, locally proven | [persona-tool-calling](features/persona-tool-calling.md) | Chat, Cabinet, Discord persona turns |
 | Persona Team (AI Employee Company) | Active baseline — the operating model tying the persona layers together | [persona-team](features/persona-team.md) | `thehomie profile create\|env-sync\|learning`, `/agents`, persona channels |
-| **Universal Persona Cognition** | Shipped 2026-08-13 (epic #418) — THE MAP: every persona runs the full cognitive loop by default (experience → own notes → read-back → nightly distillation → dream → beliefs); doctrine, schedule inventory, kill switches, verification receipts | [universal-persona-cognition](features/universal-persona-cognition.md) | born-learning at create, worktick notes, `persona_learning_tick`, `persona_dream_tick`, learn drops |
-| Persona Learning Loop | Shipped — new personas are born learning (#422); pre-#422 profiles unchanged (absent key = OFF) | [persona-learning-loop](features/persona-learning-loop.md) | `thehomie profile learning`, scheduled belief extraction |
-| Autonomous Persona Harness Learning | Implemented locally; isolated verification, live outcome improvement unverified | [persona-harness-learning](features/persona-harness-learning.md) | Agent Learning tab, `profile learning summary/history/show/pause/resume/rollback` |
+| **Universal Persona Cognition** | Memory, reflection/dream, and the v1.8.0 evidence-to-qualified-method cycle; doctrine, schedules, kill switches, and verification receipts | [universal-persona-cognition](features/universal-persona-cognition.md) | Experience notes, reflection/dream ticks, Learning tab, and harness worker |
+| Persona Learning Loop | Legacy reflection fan-out: new personas opt in at creation; absent key remains OFF for that reflection producer | [persona-learning-loop](features/persona-learning-loop.md) | `thehomie profile learning`, scheduled belief extraction |
+| Autonomous Persona Harness Learning | Released in v1.8.0; harness defaults ON for valid profiles, methods provisional, live second-vendor validation pending | [persona-harness-learning](features/persona-harness-learning.md) | Agent Learning tab, `profile learning summary/history/show/pause/resume/rollback` |
+| Persona Harness Learning Developer Guide | Existing v1.8.0 interfaces and executable isolated examples | [persona-harness-learning-developer](features/persona-harness-learning-developer.md) | Framework lifecycle hooks, domain evidence producers, qualification and context receipts |
 | Persona Curriculum Engine | Implemented — persona-private source feeds, OKF doctrine, proposal-only applications | [persona-curriculum-engine](features/persona-curriculum-engine.md) | `thehomie curriculum`, `/curriculum`, `curriculum_tick.py` |
 | Persona Self-Provisioning | Executor + typed command surface shipped 2026-08-13 (#426/#427); counter-offer and skill intake pending | [persona-self-provisioning](features/persona-self-provisioning.md) | `/persona grant\|revoke`, `personas.services.add_persona_toolset`, per-persona grant ledger |
 | Persona Experience Notes | Shipped 2026-08-12 (#420) — deterministic zero-LLM work record per persona + ad-hoc ingest | [persona-experience-notes](features/persona-experience-notes.md) | co-founder worktick hook, `thehomie persona ingest` |

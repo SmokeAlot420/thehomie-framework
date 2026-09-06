@@ -2,12 +2,13 @@
 
 Status: Shipped baseline — documents current runtime behavior
 Owner: `.claude/chat/cognition/` (identity payload, regions, working memory)
-Last updated: 2026-08-16
+Last updated: 2026-09-06
 
 ## What It Does
 
-Every persona turn assembles one prompt from a fixed set of identity files plus
-per-turn context, inside a hard ~27K character ceiling. This page states which
+Persona turns combine identity files with context for the current task. The
+chat engine's system-prompt append has a 27,000-character Windows argv clamp;
+that is not a ceiling on the entire model request. This page states which
 files are actually loaded, how much room each gets, what order they occupy, and
 — the part that causes real bugs — **where standing behavior belongs versus what
 goes in a prompt**.
@@ -62,9 +63,11 @@ rule that must hold on every turn cannot live there.
 `REGION_BUDGETS` in `.claude/scripts/config.py`, each with a
 `REGION_BUDGET_*` env override resolved at call time.
 
-Budgets are in tokens; multiply by 4 for characters. The assembled prompt is
-clamped near **27,000 characters** (a Windows `CreateProcess` argv limit, not a
-design choice), so region budgets are zero-sum against each other.
+Budgets are in tokens, converted to character limits at four characters per
+token. The assembled **system-prompt append** is clamped at **27,000 characters**
+for the Windows `CreateProcess` argv limit. Regions carried in that append
+compete for its available space; separate turn-prompt content does not consume
+this append allowance.
 
 ### Budgets are ceilings, not an additive pool
 
@@ -130,6 +133,26 @@ co-founder turn cannot go blind under load, and `safety` sits immediately after
 When adding a region, a test asserting its index in the tuple is **not**
 sufficient. Assemble a prompt large enough to force truncation and assert the
 region survives while lower-priority regions are lost.
+
+## Learned Methods In The Turn Prompt
+
+The [persona learning harness](persona-harness-learning.md) compiles relevant
+active methods into a separate bundle capped at **2,000 characters**. Runtime
+lifecycle hooks place this bundle in the turn prompt, alongside the learning
+guidance and task, rather than adding another identity region to the 27K
+system append. The bundle includes the selected method versions; its cap does
+not describe the size of the entire task prompt.
+
+Preparation records what was assembled. Submission records an adapter attempt.
+Only an `executed` context receipt records the versions supplied to an actual
+completed runtime attempt with its model/provider. Content on disk, a preview,
+or a prepared receipt alone is not proof that the model received a method.
+
+Harness pause suppresses this dynamic bundle. Previously applied skill files
+and identity amendments remain available through their normal loading paths
+until explicitly rolled back. See the
+[harness developer guide](persona-harness-learning-developer.md) for the shared
+context compiler and lifecycle integration contract.
 
 ## The Action-Gate Trap
 
