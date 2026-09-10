@@ -1,12 +1,15 @@
 # Universal Persona Cognition
 
-Status: Shipped (epic #418, 2026-08-13 — six tickets, PRs #430/#437/#442/#441/#449/#444)
+Status: Foundation shipped in August 2026; continuous cognition shipped in v1.9.0
 Owner: Framework (personas + memory pipelines + cofounder + curriculum)
+Last updated: 2026-09-10
 
-For the experience-to-evaluation-to-adoption cycle and its operator controls, see
-[Autonomous Persona Harness Learning](persona-harness-learning.md). That extension
-reuses this cognitive foundation and records whether changed methods were tested,
-delivered in future context, and supported by subsequent observations.
+[Persona Harness Learning](persona-harness-learning.md) documents the continuous
+cognitive lifecycle: reorient, interpret, investigate, revisit, reflect and
+retain, and carry forward. The main Homie and specialists retain understanding
+and unfinished questions independently of whether a new procedure qualifies for
+adoption. The [developer guide](persona-harness-learning-developer.md) covers
+framework function hooks and domain evidence collectors.
 
 This is the operator's chapter for the whole cognitive machine. Each subsystem
 has its own detailed page (linked below); this page is the map: what runs,
@@ -58,7 +61,26 @@ persona_dream_tick  →  memory_dream.py -p <name>  per persona
       thehomie persona ingest <name> <file|text>  (articles/text → experience notes)
 ```
 
-## The Harness Learning Cycle (v1.8.0)
+## Continuous Persona Cognition (v1.9.0)
+
+```text
+reorient with identity, understanding, evidence, and open questions
+  -> interpret meaningful work with actual model reasoning
+  -> retain a bounded conclusion or open an investigation
+  -> revisit when its validated time/evidence condition is due
+  -> reassess with the original situation and fresh evidence
+  -> carry relevant retained versions into later ordinary work
+```
+
+Host-attributed function hooks persist work for the Python-owned reasoning
+worker. They serve the same persona lifecycle on Codex, Kimi, Claude, and other
+configured runtimes. Claude Mods are an optional adapter. Understanding may
+remain tentative or become source-supported; a no-change conclusion is also a
+valid result. A later executed-context receipt identifies which versions reached
+the request. Observation-only work can complete this cycle without a trade or
+adopted method.
+
+### Procedure Qualification Within The Cognitive Lifecycle
 
 The [harness operator guide](persona-harness-learning.md) covers the additional
 loop that tests proposed improvements and follows their later use. Both the
@@ -98,7 +120,7 @@ adopted method.
 | `persona_learning_tick.py` | scheduled (12h recency guard) | `PERSONA_REFLECT_SILENT` (no chat rows AND no fresh notes) | `persona-learning-<name>-state.json` (main STATE_DIR); `last_attempt`/`last_run` split |
 | `persona_dream_tick.py` | nightly after the main dream | `DREAM_SILENT` per persona (zero LLM) | fan-out stamps in main STATE_DIR; each persona's `dream-state.json` in ITS profile tree |
 | Curriculum tick | per-persona cadence | disabled curricula skipped free | curriculum ledger per profile |
-| Harness worker | existing heartbeat, reflection, and dream seams; no new cron | no queued work, disabled/paused target, or foreground activity defers learning | `<profile data>/learning/learning.db` plus installation-wide activity/learner leases |
+| Cognitive dispatcher and harness worker | supervised chat-service dispatcher checks every 60 seconds; existing heartbeat/reflection/dream seams provide recovery wakes | no useful or due work invokes no model; foreground work, pause, or unavailable capabilities defer work | per-profile learning journal and queue, plus installation-wide dispatcher/learner/activity leases |
 
 ## Apartments — main reads across persona vaults (issue #466)
 
@@ -268,23 +290,30 @@ Corpus caps, note caps, and window knobs are call-time resolved — see
 4. **Dream receipts**: each persona's `dream-state.json` shows `consolidated`
    or an honest `DREAM_SILENT` with a spawn-fresh receipt (truth-tabled — a
    stale or missing receipt never reports success).
-5. **Qualified change**: inspect a harness candidate's supporting and
+5. **Understanding and investigation**: follow actual evidence to a cycle's
+   reasoning receipt, retained understanding or question, later evidence, and
+   reassessment. Then inspect the exact retained versions in an executed context
+   receipt from later ordinary work. A cycle can retain useful understanding
+   while its source-support check remains pending. Use the
+   [complete-cycle walkthrough](persona-harness-learning.md#verify-one-complete-learning-cycle).
+6. **Qualified change**: inspect a harness candidate's supporting and
    counterevidence, paired evaluation, and activation. A saved lesson or a
    model's confidence alone does not establish improvement.
-6. **Actual use**: follow the activation/version to a later `executed` context
+7. **Actual method use**: follow the activation/version to a later `executed` context
    receipt with its real model/provider. `prepared` and `submitted` receipts
    show assembly and attempts, not completed use; confirm the resulting work
    as well.
-7. **Outcome and reassessment**: follow that experience to a subsequent
+8. **Outcome and reassessment**: follow that experience to a subsequent
    observation and any revision or rollback. Keep absent outcomes unknown.
    The full chain can show whether a tested method helped in those cases;
    it does not by itself establish durable improvement across the domain.
 
 ## Watch items (post-ship)
 
-- The crypto persona's FIRST live distilled market lesson lands on the next
-  nightly tick (its lane resolution was fixed the day of ship — receipt:
-  `round5-live-crypto-lane-receipt.json` in the #425 run artifacts).
+- Release availability does not prove a particular installation is learning.
+  Use current cycle, investigation, execution, and context receipts. Dated rollout
+  results belong in the release receipt; increasing note counts alone does not
+  prove improved judgment.
 - Voice policy question awaiting operator ratification: read-only tools
   (incl. memory search) answer for ANYONE in a voice channel (the ported
   hermes-talk principle). See PR #449's note.
@@ -298,7 +327,7 @@ land with #427/#428/#429.
 
 ## Detailed pages
 
-- [Persona Harness Learning](persona-harness-learning.md) — operate the full evidence-to-adoption loop
+- [Persona Harness Learning](persona-harness-learning.md) — understanding, investigations, qualified methods, reports, and verification
 - [Harness Developer Guide](persona-harness-learning-developer.md) — extend shared hooks and domain producers
 - [Persona Experience Notes](persona-experience-notes.md) — the writer, caps, receipts
 - [Persona Learning Loop](persona-learning-loop.md) — the tick, the composed gate, the distiller

@@ -2,20 +2,21 @@
 
 Status: Active baseline
 Owner: Memory pipelines + recall service (`.claude/chat/recall_service.py`, `.claude/chat/cognition/`, `.claude/scripts/memory_*.py`, `.claude/scripts/entity_extractor.py`, `.claude/scripts/vault_lint.py`)
-Last updated: 2026-07-11
+Last updated: 2026-09-10
 
 ## What It Does
 
-The Homie's long-term memory is an Obsidian-style vault of Markdown notes. That
-vault is the canonical source of truth; everything derived from it is a cache.
-A local SQLite index (`memory.db`) holds an FTS5 keyword index plus 768-dim BGE
-vector embeddings (`BAAI/bge-base-en-v1.5`) of every note, fully regenerable
-from the vault at any time.
+The Markdown vault is the canonical source for notes and identity. Its local
+`memory.db` keyword/vector index is derived and can be rebuilt from those notes.
+The persona learning journal and queue are durable framework state: they hold
+cognitive cycles, understanding versions, investigations, evidence, and resumable
+work. Rebuilding the Markdown index cannot reconstruct that learning history;
+preserve both the journal and queue during backup and deployment.
 
 Two things sit on top of that index:
 
-1. **Five background pipelines** keep memory fresh (sense, promote, synthesize,
-   consolidate, compile).
+1. **Background memory pipelines and continuous cognition** keep notes and
+   retained understanding current through observed work.
 2. **One unified recall service** is the single entrypoint every consumer uses
    to read from memory — the chat engine, the heartbeat, daily reflection,
    weekly synthesis, the `/vault-ops` skill, and the `thehomie recall` CLI all
@@ -26,13 +27,21 @@ The background pipelines each have their own deep pages; this chapter covers
 multi-vault layout, how the slash commands tap it) and the **vault maintenance
 surface** (the compilation engine's link-economy guardrails and delta-lint).
 
+Continuous cognition reuses `recall_service.recall()` for bounded, persona-scoped
+historical context. Retrieved memory remains historical context, not fresh
+evidence; reasoning receipts retain its references and actual inclusion hashes.
+Versioned understanding and open investigations also enter later work through
+sanitized learning context. See the [operator guide](persona-harness-learning.md)
+and [developer guide](persona-harness-learning-developer.md).
+
 | Pipeline | Cadence | Job | Deep page |
 |---|---|---|---|
 | Heartbeat | every 2 h at :02 (framework default 30 min; this box downshifted) | proactive sense loop over calendar/email/tasks + ambient observations | [Heartbeat Runtime](heartbeat-runtime.md) |
-| Daily reflection | 8 AM | promote yesterday's log into long-term memory; compile entities | [The Living Self Manual](../the-living-self-manual.md) |
-| Weekly synthesis | Sun 8 PM | write the weekly note; update goals; compile entities | [The Living Self Manual](../the-living-self-manual.md) |
+| Daily reflection | 8 AM | promote yesterday's log into long-term memory; compile entities | [The Living Self Manual](../../the-living-self-manual.md) |
+| Weekly synthesis | Sun 8 PM | write the weekly note; update goals; compile entities | [The Living Self Manual](../../the-living-self-manual.md) |
 | Dream consolidation | post-weekly + manual | merge cross-session signal, resolve contradictions, prune stale entries | [Episodes](episodes.md) |
 | Entity compilation | on ingest / reflect / synthesis | build concept pages from sources (Karpathy LLM Wiki pattern) | [Document Uploads And Ingest](document-uploads-and-ingest.md) |
+| Continuous persona cognition | useful lifecycle events and due investigations; dispatcher checks every 60 seconds | model reasoning, retained understanding, follow-up, and later reuse | [Persona Harness Learning](persona-harness-learning.md) |
 
 Related reading: [Episodes](episodes.md) (the self's autobiography),
 [Session Opening Brief](session-opening-brief.md) (the "while you were out"

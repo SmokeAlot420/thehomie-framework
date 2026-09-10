@@ -2,15 +2,16 @@
 
 Status: Shipped — born learning per profile (#422, 2026-08-13)
 Owner: Framework (memory pipelines + personas)
-Last updated: 2026-09-06
+Last updated: 2026-09-10
 
-The [Autonomous Persona Harness Learning](persona-harness-learning.md) extension
-adds expectations, observable outcomes, held-out evaluation, automatic method
-adoption, versioned future use, and reassessment. Its Learning tab and CLI expose
-that evidence separately from this existing reflection and belief pipeline.
-This chapter documents the legacy reflection path; its eligibility rules differ
-from the harness defaults described below. For producer and runtime integration,
-see the [harness developer guide](persona-harness-learning-developer.md).
+This chapter documents the legacy scheduled reflection and belief pipeline.
+Since v1.9.0, [Persona Harness Learning](persona-harness-learning.md) also invokes
+continuous persona reasoning, retains versioned understanding, schedules
+investigations, and records later context use. Legacy reflection remains a
+complementary pipeline with separate eligibility rules. Its reflection-only
+provenance rules do not describe every learning record. See the
+[developer guide](persona-harness-learning-developer.md) for shared function hooks
+and evidence producers.
 
 ## What It Does
 
@@ -73,7 +74,7 @@ persona_learning_tick.py (DEFAULT profile, scheduled)
     │   │   ├── note files under PERSONA_NOTE_DIRS with mtime > boundary
     │   │   └── both zero? → PERSONA_REFLECT_SILENT (skip, no model call)
     │   └── subprocess: memory_reflect.py -p sales --notes-since <boundary>
-    │       ├── apply_persona_override() → HOMIE_HOME re-roots ALL paths
+    │       ├── apply_persona_override() → persona memory/data/state; preserve explicitly pinned shared ledgers
     │       ├── WORK-NOTE CORPUS (Spike-1 hybrid, NO-TOOLS):
     │       │   ├── fresh notes from memory/experience/ + memory/market/
     │       │   ├── injection gate per SECTION → reject before prompt
@@ -407,13 +408,15 @@ Persona reflection inherits the existing Living Self knobs:
 - **Contradiction knobs** — the nightly contradiction pass runs unchanged
   against each persona's own belief set.
 
-## Harness Work On The Existing Schedule
+## Continuous Cognition And Recovery Wakes
 
-The reflection and dream entrypoints also wake the harness queue after their
-ordinary work. The install-wide persona ticks and heartbeat can drain pending
-profiles through bootstrapped child processes. No new cron entry or second
-reflection loop is registered. The harness uses one installation-wide learner
-lease, checks foreground activity, and yields at stage/evaluation checkpoints.
+The chat service supervises one installation-wide dispatcher that checks useful
+and due work every 60 seconds. Reflection, dream, persona-tick, and heartbeat
+entrypoints also wake the same queue as recovery paths; no separate reflection
+service or additional cron is required. Workers preserve checkpoints, yield to
+foreground work, and revisit persisted investigations after restart. See
+[Persona Harness Learning](persona-harness-learning.md) for dispatcher health,
+pause/resume, and investigation controls.
 Test mode skips harness queue work before discovery, writes, or model calls;
 this does not change the existing reflection test-mode contract above.
 
@@ -464,11 +467,13 @@ occasional dropped turn. The dropped turns still exist in the session store
 and are visible in the transcript — they are only excluded from the
 extractor prompt.
 
-## Provenance: Why Reflection-Only
+## Legacy Reflection Provenance
 
-All persona-sourced beliefs are forced to `source="reflection"` at the
-caller level, regardless of what the LLM labels them. This is a
-**construction-level guarantee**, not a policy:
+Beliefs extracted by this legacy persona-reflection pipeline are forced to
+`source="reflection"` at the caller level, regardless of the model's label.
+Continuous-cognition understanding, investigations, observations, and
+qualification receipts have their own typed provenance. For this extractor,
+the reflection label is a **construction-level guarantee**:
 
 - The LLM's `kind` label (which maps to `source` via the existing
   `apply_operator_beliefs` seam) is overridden to `"inferred"` for every

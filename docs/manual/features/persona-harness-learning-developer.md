@@ -150,6 +150,22 @@ persona reasoning through the cognitive worker; they do not replace thinking
 with scripted conclusions. Claude, Codex, Kimi, and other runtime adapters use
 the same state and lifecycle.
 
+| Framework event | Cognitive phase | Host boundary |
+|---|---|---|
+| `work.start` | `reorient` | Start/resume with canonical persona and activity identity |
+| `evidence.received` | `interpret` | Meaningful batch of observed source/tool evidence |
+| `work.completed`, `work.failed` | `reflect` | Durable debrief for the completed or interrupted work |
+| `session.closed` | `reflect` | Debrief persisted before transient session context is cleared |
+| `investigation.due` | `revisit` | Validated trigger and a fresh evidence revision |
+
+Hook registration is trusted, in-process Python middleware:
+`register_hook(name, callback, key=...)`, where the callback receives
+`(event, next_handler)` and returns the durable receipt. Instrumentation that
+observes the existing lifecycle should call `next_handler()` and return its
+result. Registration itself is not a durable scheduler or an inference call;
+the learning journal and worker own those responsibilities. Never derive persona
+identity, executable paths, or callback code from untrusted model/source text.
+
 `runtime/claude_function_hooks.py` is only the Claude transport adapter. Claude
 Mods events enter the common framework hooks through that adapter; Claude is
 not required for cognition or background reasoning. Feature-probe the binary that
@@ -172,6 +188,14 @@ foreground priority and fair persona selection. Existing scheduled jobs are
 recovery wakes for the same durable queue. Typed pause, contention, lease,
 timeout, and provider failures defer work without converting them into failed
 learning. The worker checkpoint remains the restart boundary.
+
+Queue policy distinguishes due reassessment, current cognition, and historical
+recovery. Within a priority class, `available_at` orders ready jobs before
+creation time: an old unavailable provider request cannot retake every wake and
+starve newer runnable work. Rediscovery refreshes policy on queued/deferred/retry
+jobs without changing their identities, checkpoints, failure counts, or claims.
+Completed reasoning is reused across retries; provider outages do not consume
+the candidate's semantic-failure allowance.
 
 `reporting.build_learning_report(service, *, since, until)` returns host-computed
 counts and inspectable records without writes or model calls. It distinguishes

@@ -30,8 +30,9 @@ machine-specific proof artifacts stay outside the public manual.
 7. Read [Heartbeat Runtime](features/heartbeat-runtime.md) before changing
    proactive background reasoning, heartbeat model overrides, or scheduler
    behavior.
-8. Use [Persona Harness Learning](features/persona-harness-learning.md) to inspect
-   learning, follow evidence, pause/resume, and roll back a method. Developers
+8. Use [Persona Harness Learning](features/persona-harness-learning.md) to see what
+   personas can learn and [verify a complete cycle](features/persona-harness-learning.md#verify-one-complete-learning-cycle),
+   inspect understanding and investigations, pause/resume, and roll back a method. Developers
    adding a surface or domain should then read the
    [integration guide](features/persona-harness-learning-developer.md).
 9. Maintainers implementing architecture work should read
@@ -88,7 +89,7 @@ orchestration, and thin channel/desktop surfaces over one runtime. Use
 | Persona Capability Elevation | One exact out-of-scope tool call after authenticated operator approval | [persona-capability-elevation](features/persona-capability-elevation.md) | Discord/Telegram Approve once, `approve capability <code>` |
 | Persona Tool Calling | Codex/Claude/Kimi scoped caller-tool parity, locally proven | [persona-tool-calling](features/persona-tool-calling.md) | Chat, Cabinet, Discord persona turns |
 | Persona Team (AI Employee Company) | Active baseline — the operating model tying the persona layers together | [persona-team](features/persona-team.md) | `thehomie profile create\|env-sync\|learning`, `/agents`, persona channels |
-| **Universal Persona Cognition** | Memory, reflection/dream, and the v1.8.0 evidence-to-qualified-method cycle; doctrine, schedules, kill switches, and verification receipts | [universal-persona-cognition](features/universal-persona-cognition.md) | Experience notes, reflection/dream ticks, Learning tab, and harness worker |
+| **Universal Persona Cognition** | Shared cognition map: memory, reflection/dream, v1.9.0 understanding and investigations, and qualified methods | [universal-persona-cognition](features/universal-persona-cognition.md) | Framework function hooks, minute dispatcher, reflection/dream ticks, and Learning tab |
 | Persona Learning Loop | Legacy reflection fan-out: new personas opt in at creation; absent key remains OFF for that reflection producer | [persona-learning-loop](features/persona-learning-loop.md) | `thehomie profile learning`, scheduled belief extraction |
 | Autonomous Persona Harness Learning | v1.8.0 harness; v1.9.0 continuous cognition, understanding, investigations, and reports; verify deployed coverage | [persona-harness-learning](features/persona-harness-learning.md) | Agent Learning tab, `profile learning summary/list/history/show/report/pause/resume/rollback` |
 | Persona Harness Learning Developer Guide | Shared cognitive lifecycle, evidence producers, runtime hook adapters, and isolated examples | [persona-harness-learning-developer](features/persona-harness-learning-developer.md) | Durable cognition, qualification, context receipts, and reporting |

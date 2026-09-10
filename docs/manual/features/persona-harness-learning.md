@@ -26,6 +26,25 @@ This chapter covers daily operation. Use the
 surface or domain, and [Universal Persona Cognition](universal-persona-cognition.md)
 for the wider memory, reflection, and dream system.
 
+## What Each Homie Can Learn
+
+The main Homie and specialists share the same lifecycle. Their identity, actual
+work, and available evidence determine the subject. These are examples of what
+the framework can retain, not claims that every persona has learned them already.
+
+| Persona | Possible retained understanding | Evidence to revisit |
+|---|---|---|
+| Main Homie | An operator preference, a recurring task failure, a mistaken assumption about its own capabilities | Later corrections, task results, or observed service behavior |
+| Sales | When a particular objection or diagnostic question matters | Comparable conversations, replies, and verified outcomes |
+| Market specialist | A bounded chart interpretation, a source's observed claim, or an unresolved price-level question | Fresh closed candles, indicator changes, or subsequent source revisions |
+| Other specialists | Domain concepts, successful examples, mistakes, uncertainty, and gaps discovered during work | Their own conversations, research sources, tools, and feedback |
+
+Studying can introduce a tentative interpretation; later evidence can strengthen,
+qualify, or overturn it. A persona can also conclude that nothing changed. Idle
+time does not require unrelated study, and saving a conclusion is not proof of
+improved professional performance. Knowledge and questions can persist before a
+new standing procedure is qualified.
+
 ## Start With The Running Installation
 
 Continuous cognition ships in
@@ -44,6 +63,36 @@ thehomie profile learning summary default --json
 inspection does not create a missing profile. An empty learning history can be
 normal before the first captured experience. A service or storage error must be
 shown as an error, not interpreted as an empty history.
+
+## Verify One Complete Learning Cycle
+
+Use **Agents → the persona → Learning**, or the read-only commands below. Replace
+`default` with an existing specialist name and `RECORD_ID` with an ID returned by
+the history view.
+
+```sh
+thehomie profile learning summary default --json
+thehomie profile learning list default --kind cognitive_cycle --limit 10 --json
+thehomie profile learning list default --kind understanding --limit 10 --json
+thehomie profile learning list default --kind investigation --limit 10 --json
+thehomie profile learning show default RECORD_ID --json
+thehomie profile learning report default --json
+```
+
+1. Start with a real observation and its source, revision, and timestamp.
+2. Follow it to a cognitive cycle with an actual execution/model receipt and a
+   concise conclusion. A queued cycle alone has not reasoned yet.
+3. Inspect the resulting understanding or investigation. Follow the question's
+   trigger, later evidence, and reassessment; no trade or adopted method is required.
+4. After ordinary work resumes, inspect a delivered context record whose phase is
+   `executed`. Its included record IDs and hashes show which retained versions
+   reached that completed request, on which model/provider.
+
+For a restart check, preserve the original IDs, restart through the installation's
+normal lifecycle, then verify a new observation and actual reassessment afterward.
+Processing evidence collected before restart proves checkpoint recovery; a new
+collection afterward proves that follow-up acquisition resumed too. An enabled
+flag, a healthy process, or a growing record count cannot substitute for this chain.
 
 ## Daily Operator Flow
 
@@ -226,6 +275,8 @@ that reflection tick. Do not apply that old default to the v1.8 harness.
 | Main Homie has a different history in the bot and CLI | Compare `HOMIE_DEFAULT_PROFILE_ROOT` in the actual process launchers; inventory and reconcile split stores before changing the root, never silently choose one history |
 | Investigation blocked | Inspect the requested evidence source and next-check reason; source access, missing candles, or stale data must not become a false conclusion |
 | Quota, auth, or transport error | Read the visible error and repair the existing provider configuration as appropriate; infrastructure failures retain checkpoints and defer rather than consuming semantic-failure retries |
+| Codex chat works but a background or tool request fails | Inspect the specific transport/capability error. Strict reasoning and caller tools use the verified app-server bridge; ordinary `codex exec` can use a different binary. See the [runtime guide](runtime-status-model-control.md#learning-when-you-change-models). |
+| A chart cycle cannot run on the selected model | Inspect actual image capability and configured fallback. Numeric-only evidence is a valid input when explicitly supplied; an image request is not silently relabeled as a successful visual analysis. |
 | Observer unavailable | Restore access to the exact evidence source; retain the pending or partial observation instead of inventing an outcome |
 | Qualification failed | Inspect applicable cases, counterexamples, baseline, and hard checks; the candidate is not entitled to adoption |
 | Method no longer appears in the learned bundle | Check applicability, context budget, actual applied content, pause/disable state, and reassessment history |
@@ -237,9 +288,13 @@ entry means the whole persona stopped working. Ordinary work can continue after
 optional capture fails and records an honest coverage failure. Learning-initiated
 trials and adoption require durable records.
 
-Typed provider quota/auth/transport errors defer a checkpoint for ten minutes.
-Unavailable observers also retain a deferred checkpoint. Semantic job failures
-have a separate retry limit. Current operational defaults are:
+Retry eligibility depends on the recorded failure class. Shared control and
+learning-unavailable deferrals normally wait 60 seconds; runtime/network/storage
+errors caught by the worker's infrastructure branch wait 600 seconds. Provider
+cooldowns, foreground activity, and persona rotation can delay the actual next
+attempt. Inspect the job's `available_at`, stage, and error rather than assuming
+a retry occurs exactly on the next minute. Semantic job failures have a separate
+retry limit. Current operational defaults are:
 
 | Setting | Default |
 |---|---|
@@ -257,10 +312,13 @@ availability remain prerequisites for qualification.
 
 ## Scheduling And Surface Coverage
 
-Persistence notifications enqueue work without calling a model. Existing
-heartbeat, reflection, and dream entry points wake one resumable worker; no new
-cron is required. Due observations, regressions, and corrections take priority
-over new practice. Empty queues create no artificial study tasks. Shared activity
+Persistence notifications enqueue work without calling a model. The chat service
+supervises one elected dispatcher that checks every 60 seconds. Existing
+heartbeat, reflection, and dream entry points are recovery wakes for the same
+queue; no additional cron is required. Due reassessments precede fresh cognition;
+historical recovery follows current work. At equal priority, ready-time ordering
+lets other waiting jobs progress when an older job is deferred. Empty queues
+create no artificial study tasks. Shared activity
 leases give foreground work priority; the learner yields between stages, so an
 in-flight request may finish first.
 
@@ -303,11 +361,17 @@ corrections. Historical imports remain backfill and never invent a prior
 expectation. Private domain implementations and operational evidence are not
 required by or included in the public learning core.
 
-Live synthetic method-use checks for v1.8.0 passed on Sonnet and Haiku. The live
-second-vendor check remains pending because the tested Gemini account lacked a
-valid license. This is a recorded validation limit, not a guarantee that every
-installation has that account problem. Synthetic qualification and observational
-support do not establish long-term professional improvement.
+The v1.9.0 deployment acceptance verified real persona reasoning on Kimi and
+later use of that retained understanding in a Codex conversation. A specialist
+also completed a Codex-only numeric-evidence trace through retention, restart,
+fresh observation, reassessment, and later ordinary context inclusion. A separate
+vision trace verified actual chart-image delivery. Minute-level dispatch and
+deduplicated daily recap delivery were observed on that installation.
+
+These are dated lifecycle and runtime proofs, not a claim that every configured
+account is available or that domain performance has improved. The earlier v1.8.0
+synthetic method-use checks remain historical evidence; assess current readiness
+with your own running installation and records.
 
 ## API And Further Reference
 
