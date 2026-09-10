@@ -286,3 +286,5 @@ class RuntimeResult:
     tool_calls: list[RuntimeToolCall] = field(default_factory=list)
     usage: dict[str, int] | None = None
     execution_time_ms: int | None = None
+    # Adapter-owned receipts, never a claim inferred from requested inputs.
+    metadata: dict[str, Any] = field(default_factory=dict)

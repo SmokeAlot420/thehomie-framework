@@ -120,6 +120,63 @@ class LearningContext:
     context_hash: str = ""
 
 
+COGNITIVE_PHASES = frozenset({"reorient", "interpret", "reflect", "revisit"})
+UNDERSTANDING_TYPES = frozenset(
+    {"concept", "interpretation", "belief", "self_assessment", "source_assessment"}
+)
+
+
+def validate_investigation_trigger(value: Any) -> dict[str, Any]:
+    """Validate the bounded observation request without granting execution authority."""
+    if not isinstance(value, dict):
+        raise LearningValidationError("investigation trigger must be an object")
+    trigger = dict(value)
+    kind = trigger.get("type")
+    fields = {
+        "deadline": {"type", "at"},
+        "closed_candles": {"type", "asset", "venue", "timeframe", "after", "count"},
+        "crossing": {
+            "type",
+            "asset",
+            "venue",
+            "timeframe",
+            "metric",
+            "threshold",
+            "direction",
+            "baseline",
+        },
+        "source_update": {"type", "source_id", "revision", "thread_id"},
+    }
+    if kind not in fields or set(trigger) - fields[kind]:
+        raise LearningValidationError("unsupported investigation trigger")
+    required = fields[kind] - {"thread_id"}
+    if required - set(trigger):
+        raise LearningValidationError("investigation trigger is missing fields")
+    for key, item in trigger.items():
+        if key not in {"count", "threshold", "baseline"}:
+            if not isinstance(item, str) or not item.strip() or len(item) > 512:
+                raise LearningValidationError("invalid investigation trigger text")
+    for key in {"at", "after"} & set(trigger):
+        try:
+            stamp = datetime.fromisoformat(trigger[key].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                raise ValueError
+        except ValueError as exc:
+            raise LearningValidationError("trigger timestamps require a timezone") from exc
+        trigger[key] = stamp.astimezone(UTC).isoformat()
+    if kind == "closed_candles" and (
+        type(trigger["count"]) is not int or not 1 <= trigger["count"] <= 1000
+    ):
+        raise LearningValidationError("closed candle count must be between 1 and 1000")
+    if kind == "crossing":
+        if trigger["direction"] not in {"above", "below"}:
+            raise LearningValidationError("crossing direction must be above or below")
+        for key in ("threshold", "baseline"):
+            if type(trigger[key]) not in {float, int} or not math.isfinite(trigger[key]):
+                raise LearningValidationError("crossing values must be finite numbers")
+    return trigger
+
+
 def resolve_learning_target(persona_id: str) -> LearningTarget:
     """Resolve the requested physical profile, never the process's ambient data."""
     from personas import get_persona_paths

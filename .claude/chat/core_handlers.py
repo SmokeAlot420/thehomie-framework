@@ -381,6 +381,12 @@ async def handle_clear(adapter: Any, incoming: Any, args: str, *, collect_only: 
             trigger_source=getattr(incoming, "source", "interactive"),
         )
         warning = result.warning_summary()
+        if getattr(result, "session_retained", False):
+            return (
+                "Session was not cleared because its learning debrief could not be saved. "
+                "Your conversation is still intact.\n"
+                f"Lifecycle warning: {warning}"
+            )
         if warning:
             return (
                 "Session cleared. Next message starts fresh.\n"
@@ -3591,7 +3597,7 @@ async def handle_teamtick(
         return parsed
     team_id, opts = parsed
 
-    from config import ORCHESTRATION_DB_PATH, ensure_directories
+    from config import get_orchestration_db_path, ensure_directories
     from orchestration.db import OrchestrationDB
     from orchestration.live_safety import LiveExecutionRefused, require_live_agent_run
     from orchestration.observability import init_orchestration_observability
@@ -3608,7 +3614,7 @@ async def handle_teamtick(
 
     ensure_directories()
     init_orchestration_observability()
-    db = OrchestrationDB(ORCHESTRATION_DB_PATH)
+    db = OrchestrationDB(get_orchestration_db_path())
     try:
         result = TeamTickService(db).run_team_tick(team_id, **opts)
     finally:
@@ -3844,7 +3850,7 @@ async def handle_teamroom(
     if isinstance(parsed, str):
         return parsed
 
-    from config import ORCHESTRATION_DB_PATH, ensure_directories
+    from config import get_orchestration_db_path, ensure_directories
     from orchestration.db import OrchestrationDB
     from orchestration.live_safety import LiveExecutionRefused, require_live_agent_run
     from orchestration.observability import init_orchestration_observability
@@ -3862,7 +3868,7 @@ async def handle_teamroom(
     def _run_team_room() -> Any:
         ensure_directories()
         init_orchestration_observability()
-        db = OrchestrationDB(ORCHESTRATION_DB_PATH)
+        db = OrchestrationDB(get_orchestration_db_path())
         try:
             return TeamRoomWorkflowService(db).run_team_room(**parsed)
         finally:

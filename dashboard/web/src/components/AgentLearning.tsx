@@ -1,13 +1,14 @@
-import { useState } from 'preact/hooks';
+import { useRef, useState } from 'preact/hooks';
 import { apiPost, describeApiError } from '@/lib/api';
 import { useFetch } from '@/lib/useFetch';
 import { Empty } from '@/components/Empty';
 import { Spinner } from '@/components/Spinner';
 import { Modal } from '@/components/Modal';
-import type { LearningPage, LearningRecord, LearningSummary } from '@/types/learning';
+import type { LearningPage, LearningRecord, LearningReport, LearningSummary } from '@/types/learning';
 
 const buttonClass = 'px-3 py-2 rounded border border-[var(--color-border)] text-[12px] disabled:opacity-50 hover:bg-[var(--color-elevated)]';
 const filters = [
+  ['understanding', 'Understanding'], ['investigation', 'Investigations'], ['cognitive_cycle', 'Cognitive cycles'],
   ['', 'All activity'], ['experience', 'Experiences'], ['observation', 'Outcomes'],
   ['candidate', 'Proposed changes'], ['evaluation', 'Evaluations'],
   ['activation', 'Methods'], ['failure', 'Failures'],
@@ -25,14 +26,24 @@ function textField(record: LearningRecord, ...keys: string[]): string {
 export function AgentLearning({ agentId }: { agentId: string }) {
   const base = `/api/agents/${encodeURIComponent(agentId)}/learning`;
   const [kind, setKind] = useState('');
+  const [status, setStatus] = useState('');
   const [cursors, setCursors] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [rollback, setRollback] = useState<LearningRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [days, setDays] = useState(7);
+  const [period, setPeriod] = useState(() => reportPeriod(7));
+  const [explanation, setExplanation] = useState<LearningReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const reportUrl = `${base}/report?${new URLSearchParams(period)}`;
+  const currentReportUrl = useRef(reportUrl);
+  currentReportUrl.current = reportUrl;
+  const report = useFetch<LearningReport>(reportUrl);
   const summary = useFetch<LearningSummary>(base, 15000);
   const query = new URLSearchParams({ limit: '30' });
   if (kind) query.set('kind', kind);
+  if (status) query.set('status', status);
   if (cursors.length) query.set('cursor', cursors[cursors.length - 1]);
   const history = useFetch<LearningPage>(`${base}/records?${query}`, 15000);
   const detail = useFetch<LearningRecord>(selected ? `${base}/records/${encodeURIComponent(selected)}` : null);
@@ -53,20 +64,42 @@ export function AgentLearning({ agentId }: { agentId: string }) {
     }
   }
 
+  async function explain() {
+    setReportBusy(true);
+    setActionError(null);
+    try {
+      const result = await apiPost<LearningReport>(reportUrl);
+      if (currentReportUrl.current === reportUrl) setExplanation(result);
+    } catch (error) {
+      setActionError(describeApiError(error));
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
   return (
     <div class="space-y-5 max-w-5xl text-[var(--color-text)]">
       <div class="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 class="text-[16px] font-medium">Learning</h2>
-          <p class="text-[12px] text-[var(--color-text-muted)] mt-1">What changed, what happened, and which methods this Homie is using.</p>
+          <p class="text-[12px] text-[var(--color-text-muted)] mt-1">What this Homie understands, what it is investigating, and what changed through experience.</p>
         </div>
         <div class="flex gap-2">
-          <button type="button" class={buttonClass} onClick={() => { summary.refresh(); history.refresh(); }}>Refresh</button>
+          <button type="button" class={buttonClass} onClick={() => { summary.refresh(); history.refresh(); setPeriod(reportPeriod(days)); setExplanation(null); }}>Refresh</button>
           {summary.data && <button type="button" class={buttonClass} disabled={busy || !summary.data.enabled}
             onClick={() => void mutate(summary.data!.paused ? 'resume' : 'pause')}>
             {summary.data.paused ? 'Resume learning' : 'Pause learning'}
           </button>}
         </div>
+        {summary.data?.cognition && <section aria-label="Cognitive lifecycle" class="border border-[var(--color-border)] rounded p-3 space-y-2 text-[12px]">
+          <h3 class="font-medium">Cognitive lifecycle</h3>
+          <p>Dispatcher: {summary.data.cognition.dispatcher.state.replaceAll('_', ' ')}
+             · Last successful check: {dispatcherCheckTime(summary.data.cognition.dispatcher.last_success_at)}</p>
+          {summary.data.cognition.dispatcher.error_type && <p role="status" class="text-amber-400">{summary.data.cognition.dispatcher.error_type}</p>}
+          <p>Cycles: {statusCounts(summary.data.cognition.cycles)} · Investigations: {statusCounts(summary.data.cognition.investigations)}</p>
+          <p>{summary.data.cognition.delivered_contexts} executed requests received retained understanding or investigations.</p>
+          <details><summary class="cursor-pointer">Hook coverage</summary><pre class="whitespace-pre-wrap break-words mt-2">{JSON.stringify(summary.data.cognition.dispatcher.adapter_coverage ?? {}, null, 2)}</pre></details>
+        </section>}
       </div>
 
       {actionError && <p role="alert" class="text-[12px] text-red-400">{actionError}</p>}
@@ -107,12 +140,54 @@ export function AgentLearning({ agentId }: { agentId: string }) {
         </section>}
       </>}
 
+      <section aria-label="Learning report" class="space-y-3 border border-[var(--color-border)] rounded p-4">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
+          <h3 class="text-[13px] font-medium">What changed</h3>
+          <select aria-label="Learning report period" value={days} class="text-[12px] border border-[var(--color-border)] bg-[var(--color-card)] rounded p-2"
+            onChange={(event) => { const value = Number(event.currentTarget.value); setDays(value); setPeriod(reportPeriod(value)); setExplanation(null); }}>
+            <option value={1}>Last 24 hours</option><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option>
+          </select>
+        </div>
+        {report.error ? <p role="alert" class="text-[12px] text-red-400">Report unavailable: {report.error}</p>
+          : report.loading ? <Spinner /> : report.data?.counts && <>
+            <dl class="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
+              {[
+                ['Distinct conclusions', 'distinct_conclusions'], ['Understanding changes', 'understanding_changes'],
+                ['Investigations opened', 'investigations_opened'], ['Completed thinking cycles', 'completed_cycles'],
+                ['Observations', 'observations'], ['Qualification attempts', 'qualification_attempts'],
+                ['Methods adopted', 'methods_adopted'], ['Later context inclusion', 'delivered_contexts'],
+              ].map(([label, key]) => <div key={key}><dt class="text-[var(--color-text-muted)]">{label}</dt><dd class="text-[20px] tabular-nums">{report.data!.counts[key] ?? 0}</dd></div>)}
+            </dl>
+            <p class="text-[11px] text-[var(--color-text-muted)]">Counts come from distinct recorded changes. Evaluation trials are not counted as learned ideas; context inclusion does not by itself prove better results.</p>
+            {!report.data.has_activity && <p class="text-[12px]">No learning changes were recorded in this period.</p>}
+            <button type="button" class={buttonClass} disabled={reportBusy || !report.data.has_activity || summary.data?.paused || !summary.data?.enabled} onClick={() => void explain()}>
+              {reportBusy ? 'Explaining recorded changes…' : 'Explain these changes'}
+            </button>
+            {(explanation?.narrative || report.data.narrative) && <p class="text-[12px] whitespace-pre-wrap break-words">{explanation?.narrative || report.data.narrative}</p>}
+            {!!report.data.open_investigations?.length && <div class="space-y-2">
+              <h4 class="text-[12px] font-medium">Open investigations</h4>
+              {report.data.open_investigations.map((item) => <button type="button" key={item.id} class="block text-left text-[12px] hover:underline" onClick={() => setSelected(item.id)}>
+                {item.question || item.id} · {item.status}{item.reason && ` · ${item.reason}`}
+              </button>)}
+            </div>}
+            {!!report.data.records?.length && <nav aria-label="Reported learning records" class="flex flex-wrap gap-2">
+              {report.data.records.map((item) => <button type="button" key={item.id} class={buttonClass} onClick={() => setSelected(item.id)}>{item.title || item.question || item.kind} · {item.id.slice(0, 8)}</button>)}
+            </nav>}
+            {report.data.records_truncated && <p class="text-[11px] text-[var(--color-text-muted)]">Showing the latest 60 records; counts cover the full selected period. Use History to inspect older records.</p>}
+          </>}
+      </section>
+
       <section class="space-y-3" aria-label="Learning history">
-        <div class="flex justify-between items-center gap-3">
+        <div class="flex justify-between items-center gap-3 flex-wrap">
           <h3 class="text-[13px] font-medium">History</h3>
           <select aria-label="Filter learning history" value={kind} class="text-[12px] border border-[var(--color-border)] bg-[var(--color-card)] rounded p-2"
-            onChange={(event) => { setKind(event.currentTarget.value); setCursors([]); }}>
+            onChange={(event) => { setKind(event.currentTarget.value); setStatus(''); setCursors([]); }}>
             {filters.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <select aria-label="Filter learning status" value={status} class="text-[12px] border border-[var(--color-border)] bg-[var(--color-card)] rounded p-2"
+            onChange={(event) => { setStatus(event.currentTarget.value); setCursors([]); }}>
+            <option value="">All statuses</option>
+            {['open', 'due', 'pending', 'blocked', 'retained', 'completed', 'tentative', 'supported', 'superseded', 'needs_reassessment', 'failed'].map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}
           </select>
         </div>
         {history.error ? <p role="alert" class="text-[12px] text-red-400">History unavailable: {history.error}</p>
@@ -122,7 +197,7 @@ export function AgentLearning({ agentId }: { agentId: string }) {
                 {history.data.records.map((record) => <li key={record.id} class="py-3">
                   <button type="button" class="text-left w-full hover:bg-[var(--color-elevated)] rounded p-2" onClick={() => setSelected(record.id)}>
                     <span class="text-[10px] uppercase text-[var(--color-text-faint)]">{record.kind.replaceAll('_', ' ')}</span>
-                    <span class="block text-[12px] break-words">{textField(record, 'title', 'summary', 'lesson', 'error', 'status')}</span>
+                    <span class="block text-[12px] break-words">{textField(record, 'title', 'question', 'conclusion', 'summary', 'lesson', 'error', 'status')}</span>
                     <span class="block text-[11px] text-[var(--color-text-muted)]">{['status', 'mode', 'quality'].map((field) => record.payload[field]).filter((value): value is string => typeof value === 'string').join(' · ').replaceAll('_', ' ')}</span>
                     <time class="text-[10px] text-[var(--color-text-muted)]">{new Date(record.created_at).toLocaleString()}</time>
                   </button>
@@ -140,7 +215,9 @@ export function AgentLearning({ agentId }: { agentId: string }) {
           <p class="text-[11px] text-[var(--color-text-muted)] mb-3">{detail.data.kind} · {new Date(detail.data.created_at).toLocaleString()}</p>
           <dl class="space-y-3 mb-4 text-[12px]">
             {[
-              ['content', 'Method or lesson'], ['applicability', 'Applies when'],
+              ['content', 'Understanding or method'], ['question', 'Investigation question'], ['why', 'Why it matters'],
+              ['conclusion', 'Conclusion'], ['trigger', 'Next observation'], ['next_check_at', 'Next check'],
+              ['scope', 'Scope'], ['applicability', 'Applies when'],
               ['claim', 'Expected result'], ['resolution_rule', 'How it is checked'],
               ['evidence', 'Observed evidence'], ['uncertainty', 'Uncertainty'],
               ['reason', 'Reason'], ['error', 'Problem'],
@@ -167,4 +244,20 @@ export function AgentLearning({ agentId }: { agentId: string }) {
       </Modal>
     </div>
   );
+}
+
+function reportPeriod(days: number) {
+  const end = new Date();
+  return { since: new Date(end.getTime() - days * 86400000).toISOString(), until: end.toISOString() };
+}
+
+function statusCounts(counts: Record<string, number>): string {
+  return Object.entries(counts).map(([status, count]) => `${count} ${status.replaceAll('_', ' ')}`).join(', ') || 'none yet';
+}
+
+function dispatcherCheckTime(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return 'Unknown';
+  // The Python dispatcher records Unix seconds; JavaScript Date takes milliseconds.
+  const date = new Date(value * 1000);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Unknown';
 }

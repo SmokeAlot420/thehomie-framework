@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -54,6 +55,30 @@ def _call(action: Callable[[], Any]) -> Any:
 @router.get("/api/agents/{persona_id}/learning")
 def learning_summary(persona_id: str, request: Request) -> dict:
     return _call(lambda: _operator(persona_id, request).summary())
+
+
+@router.get("/api/agents/{persona_id}/learning/report")
+def learning_report(
+    persona_id: str,
+    request: Request,
+    since: str | None = Query(None, max_length=64),
+    until: str | None = Query(None, max_length=64),
+) -> dict:
+    return _call(lambda: _operator(persona_id, request).report(since=since, until=until))
+
+
+@router.post("/api/agents/{persona_id}/learning/report")
+def explain_learning_report(
+    persona_id: str,
+    request: Request,
+    since: str | None = Query(None, max_length=64),
+    until: str | None = Query(None, max_length=64),
+) -> dict:
+    # FastAPI runs this sync route in its worker pool. Explicit POST invokes
+    # bounded inference; polling GET never spends tokens or mutates state.
+    return _call(
+        lambda: asyncio.run(_operator(persona_id, request).explain_report(since=since, until=until))
+    )
 
 
 @router.get("/api/agents/{persona_id}/learning/records")

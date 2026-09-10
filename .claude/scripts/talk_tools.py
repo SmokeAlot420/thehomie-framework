@@ -1005,7 +1005,7 @@ def _convoy_service():
     from orchestration.convoy_service import ConvoyService  # noqa: PLC0415
     from orchestration.db import OrchestrationDB  # noqa: PLC0415
 
-    return ConvoyService(OrchestrationDB(config.ORCHESTRATION_DB_PATH))
+    return ConvoyService(OrchestrationDB(config.get_orchestration_db_path()))
 
 
 def _create_voice_convoy(title: str, task: str) -> tuple[int | str, int | str]:

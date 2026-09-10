@@ -34,4 +34,18 @@ describe('learning proxy', () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ detail: 'Newer procedure conflicts with rollback' });
   });
+
+  it.each(['GET', 'POST'])('keeps %s report periods and inference ownership in Python', async (method) => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify({
+      persona_id: 'default', counts: { distinct_conclusions: 2 }, records: [{ id: 'idea', persona_id: 'default' }],
+    })));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const response = await agentsRoute.request('/api/agents/main/learning/report?since=2026-09-01T00%3A00%3A00Z&until=2026-09-08T00%3A00%3A00Z&token=never-forward', { method });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.pathname).toBe('/api/agents/default/learning/report');
+    expect(Object.fromEntries(url.searchParams)).toEqual({ since: '2026-09-01T00:00:00Z', until: '2026-09-08T00:00:00Z' });
+    expect(fetchMock.mock.calls[0][1]?.method).toBe(method);
+    expect(await response.json()).toMatchObject({ persona_id: 'main', counts: { distinct_conclusions: 2 }, records: [{ id: 'idea', persona_id: 'main' }] });
+  });
 });

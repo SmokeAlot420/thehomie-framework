@@ -2393,6 +2393,7 @@ class ConversationEngine:
             origin_id=learning_hooks.incoming_origin(message, session_key),
             task=message.text,
         )
+        await asyncio.to_thread(learning_turn.capture_sources, {"prefetched_context": message.prefetched_context})
         runtime_request = learning_turn.request
         if _trace_decisions is not None:
             _trace_decisions["learning"] = runtime_request.metadata.get("learning")

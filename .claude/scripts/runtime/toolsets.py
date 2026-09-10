@@ -141,7 +141,7 @@ _BROWSER_READ_TOOLS: list[str] = [
 TOOLSETS: dict[str, Toolset] = {
     "cognitive_learning": {
         "description": "Persona-private expectations and learning records.",
-        "tools": ["record_expectation"],
+        "tools": ["record_expectation", "learning_report"],
         "includes": [],
     },
     # -----------------------------------------------------------------------

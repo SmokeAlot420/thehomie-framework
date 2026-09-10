@@ -14,6 +14,21 @@ function response(body: unknown, status = 200) {
 describe('persona learning operator panel', () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
+  it.each([1789061169, null, 'not-a-timestamp'])('renders dispatcher Unix seconds or an explicit unknown (%s)', async (value) => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => response(String(input).includes('/records?')
+      ? { records: [], next_cursor: null }
+      : { ...summary(), cognition: { cycles: {}, understanding: {}, investigations: {}, delivered_contexts: 0,
+        dispatcher: { state: 'healthy', last_success_at: value } } })) as typeof fetch;
+    render(<AgentLearning agentId="main" />);
+    const expected = typeof value === 'number' ? new Date(value * 1000).toLocaleString() : 'Unknown';
+    const check = await screen.findByText((text) => text.includes(`Last successful check: ${expected}`));
+    expect(check).toBeInTheDocument();
+    if (typeof value === 'number') {
+      expect(check.textContent).toContain('2026');
+      expect(check.textContent).not.toContain('1970');
+    }
+  });
+
   it('shows actual background provider failures without claiming learning finished', async () => {
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => response(String(input).includes('/records?')
       ? { records: [], next_cursor: null }
@@ -102,5 +117,40 @@ describe('persona learning operator panel', () => {
     render(<AgentLearning agentId="main" />);
     await screen.findByText(/Learning status unavailable/);
     expect(screen.queryByText('No learning records yet')).not.toBeInTheDocument();
+  });
+
+  it('shows understanding and investigation reports and only invokes reasoning explicitly', async () => {
+    const requests: Array<{ path: string; method: string }> = [];
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input);
+      requests.push({ path, method: init?.method ?? 'GET' });
+      if (path.includes('/report?')) return response({
+        persona_id: 'main', period: { since: '', until: '' }, counts: { distinct_conclusions: 2, understanding_changes: 3, investigations_opened: 1 },
+        records: [{ id: 'idea_1', kind: 'understanding', title: 'Breakout follow-through' }],
+        open_investigations: [{ id: 'inquiry_1', question: 'Did the next candle confirm it?', status: 'pending' }],
+        has_activity: true, records_truncated: false, narrative_status: init?.method === 'POST' ? 'generated' : 'not_requested',
+        narrative: init?.method === 'POST' ? 'The later candle changed my tentative interpretation [idea_1].' : null,
+      });
+      if (path.endsWith('/records/idea_1')) return response({ ...method, id: 'idea_1', kind: 'understanding', payload: { title: 'Breakout follow-through', content: 'Treat the first breakout as tentative.', uncertainty: 'One sample' } });
+      return response(path.includes('/records?') ? { records: [], next_cursor: null } : {
+        ...summary(), cognition: { cycles: { completed: 1 }, understanding: { tentative: 2 }, investigations: { pending: 1 }, delivered_contexts: 1,
+          dispatcher: { state: 'healthy', adapter_coverage: { claude: 'engine_callbacks' } } },
+      });
+    }) as typeof fetch;
+    render(<AgentLearning agentId="main" />);
+    await screen.findByText('Distinct conclusions');
+    expect(requests.every((request) => request.method === 'GET')).toBe(true);
+    expect(screen.getByText(/Did the next candle confirm it/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Explain these changes' }));
+    await screen.findByText(/The later candle changed my tentative interpretation/);
+    expect(requests.filter((request) => request.method === 'POST')).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText('Learning report period'), { target: { value: '1' } });
+    await waitFor(() => expect(screen.queryByText(/The later candle changed my tentative interpretation/)).not.toBeInTheDocument());
+    fireEvent.click(await screen.findByRole('button', { name: /Breakout follow-through/ }));
+    await screen.findByText('Treat the first breakout as tentative.');
+    fireEvent.change(screen.getByLabelText('Filter learning history'), { target: { value: 'cognitive_cycle' } });
+    await waitFor(() => expect(requests.some((request) => request.path.includes('kind=cognitive_cycle'))).toBe(true));
+    fireEvent.change(screen.getByLabelText('Filter learning status'), { target: { value: 'completed' } });
+    await waitFor(() => expect(requests.some((request) => request.path.includes('kind=cognitive_cycle&status=completed'))).toBe(true));
   });
 });

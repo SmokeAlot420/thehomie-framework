@@ -142,7 +142,7 @@ def _get_services() -> tuple[
     """Instantiate orchestration DB + services + executor registry."""
     import config
 
-    db_path = getattr(config, "ORCHESTRATION_DB_PATH", None)
+    db_path = config.get_orchestration_db_path()
     if db_path is None:
         raise RuntimeError("ORCHESTRATION_DB_PATH not configured")
     # check_same_thread=False: FastAPI runs sync handlers in a threadpool,

@@ -66,6 +66,41 @@ def test_new_persona_learning_reads_do_not_create_state(operator_app):
     assert not service.target.state_dir.exists()
 
 
+def test_report_period_validation_scope_and_explicit_inference(operator_app, monkeypatch):
+    from cli_learning import register_learning_commands
+
+    from personas.learning import reporting
+
+    service = operator_app.services["sales"]
+    idea = service.store.put("understanding", {"content": "Ask what changed.", "status": "tentative", "scope": "discovery"}, key="idea")
+    calls = []
+    async def explain(_service, snapshot):
+        calls.append(snapshot)
+        return {"narrative": f"One tentative interpretation [{idea['id']}].", "provider": "fake", "model": "fake"}
+    monkeypatch.setattr(reporting, "_runtime_narrative", explain)
+    client = operator_app.client
+    report = client.get("/api/agents/sales/learning/report").json()
+    assert report["counts"]["understanding_changes"] == 1
+    assert calls == []
+    response = client.post("/api/agents/sales/learning/report")
+    assert response.status_code == 200
+    assert response.json()["narrative_status"] == "generated"
+    assert len(calls) == 1
+    assert client.get("/api/agents/sales/learning/report?since=not-a-date").status_code == 422
+    assert client.post("/api/agents/crypto/learning/report", headers={"x-test-personas": "sales"}).status_code == 403
+    assert len(calls) == 1
+    @click.group()
+    def group():
+        pass
+    register_learning_commands(group)
+    result = CliRunner().invoke(group, ["report", "sales", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["counts"] == report["counts"]
+    result = CliRunner().invoke(group, ["list", "sales", "--kind", "understanding", "--json"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["records"][0]["id"] == idea["id"]
+
+
 def test_nested_opaque_credentials_are_redacted_in_records_history_and_cli(operator_app):
     service = operator_app.services["sales"]
     secrets = {key: f"opaque-value-{index}" for index, key in enumerate(("auth", "accessToken", "bearer", "secret_value", "TALK_OPENAI_API_KEY", "x-api-key", "refreshToken", "apikey", "APIKEY", "FOO_APIKEY", "jwt", "key", "key_material", "passphrase", "signing_key"))}
@@ -153,6 +188,8 @@ def test_pagination_attention_and_invalid_queries(operator_app):
     next_page = client.get(f"/api/agents/sales/learning/records?limit=2&kind=failure&cursor={page['next_cursor']}").json()
     assert [row["id"] for row in next_page["records"]] == [expected[2]["id"], expected[0]["id"]]
     assert client.get("/api/agents/sales/learning").json()["failures"] == 4
+    failures = client.get("/api/agents/sales/learning/records?kind=failure&status=deferred").json()
+    assert [row["id"] for row in failures["records"]] == [expected[2]["id"]]
     for query in ("limit=0", "limit=101", "kind=secrets"):
         assert client.get(f"/api/agents/sales/learning/records?{query}").status_code == 422
 

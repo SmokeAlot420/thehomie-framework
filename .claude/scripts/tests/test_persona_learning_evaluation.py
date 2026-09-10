@@ -5,6 +5,8 @@ import json
 import pytest
 
 from personas.learning import evaluation as ev
+from personas.learning.errors import LearningDeferredError, LearningOutputError, LearningUnavailableError
+from runtime.errors import RuntimeExecutionError
 from personas.learning.evaluation import runtime_reasoning as real_runtime_reasoning
 from personas.learning.models import LearningError, LearningTarget
 from personas.learning.promotion import promote_candidate, rollback_activation, reassess_activation
@@ -249,8 +251,8 @@ async def test_unsupported_source_and_string_boolean_are_rejected(service):
     assert result["reason"] == "evidence_unsupported"
     async def malformed(payload, **kwargs):
         return {"supported": "true", "contradictions_addressed": True, "changes_behavior": True}
-    result = await ev.evaluate_candidate(service, c["id"], judge=malformed, run_key="second")
-    assert result["reason"] == "evaluation_incomplete"
+    with pytest.raises(LearningOutputError):
+        await ev.evaluate_candidate(service, c["id"], judge=malformed, run_key="second")
 
 
 @pytest.mark.asyncio
@@ -259,16 +261,18 @@ async def test_runtime_change_cannot_pass_paired_evaluation(service):
     async def drift(case, content, manifest, **kwargs):
         return ev.CaseExecution(content, "model-b" if "diagnostic" in content else "model-a",
                                 "openai-compatible", "generic_runtime")
-    result = await ev.evaluate_candidate(service, c["id"], manifest=manifest(c), run_case=drift, judge=judge)
-    assert result["reason"] == "evaluation_incomplete"
-    assert "trial_model_drift" in result["errors"][0]
+    with pytest.raises(LearningUnavailableError, match="trial_model_drift"):
+        await ev.evaluate_candidate(service, c["id"], manifest=manifest(c), run_case=drift, judge=judge)
+    assert service.get_record(c["id"])["status"] != "evaluation_failed"
 
 
 @pytest.mark.asyncio
 async def test_primary_improvement_cannot_override_new_hard_failure(service):
     c = candidate(service)
     m = manifest(c)
-    m = replace(m, cases=(replace(m.cases[0], forbidden_substrings=("diagnostic",)), *m.cases[1:]))
+    instruction = "Do not use the word diagnostic in this response."
+    m = replace(m, cases=(replace(m.cases[0], prompt=m.cases[0].prompt + " " + instruction,
+        forbidden_substrings=("diagnostic",), exact_text_requirement=instruction), *m.cases[1:]))
     result = await ev.evaluate_candidate(service, c["id"], manifest=m, run_case=execute, judge=judge)
     assert result["candidate_score"] > result["baseline_score"]
     assert result["reason"] == "new_hard_failure" and result["passed"] is False
@@ -292,10 +296,9 @@ async def test_retry_reuses_frozen_receipt_and_exposed_cases_cannot_be_retuned(s
 async def test_checkpoint_resumes_without_repeating_completed_pairs(service):
     c = candidate(service)
     seen = []
-    class LearningDeferred(Exception):
-        pass
+    LearningDeferred = LearningDeferredError
     async def defer(item):
-        if item.get("case_id") == "q-1":
+        if item.get("case_id") == "q-1" and "candidate_score" in item:
             raise LearningDeferred("foreground")
     async def track(case, content, manifest, **kwargs):
         seen.append(case.id)
@@ -535,14 +538,14 @@ async def test_judge_uses_actual_producer_vendor_and_configured_fallback_order(t
     async def reason(prompt, **kwargs):
         attempts.append(kwargs["provider"])
         if kwargs["provider"] == "openai-codex":
-            raise RuntimeError("unavailable")
+            raise RuntimeExecutionError("unavailable")
         return ev.CaseExecution('{"supported":true,"contradictions_addressed":true,"changes_behavior":false}',
                                 "model-k", kwargs["provider"], kwargs["runtime_lane"])
     result = await ev.runtime_judge({"mode": "support", "candidate": "claim"}, cwd=tmp_path,
                                     producer_provider="claude", reasoning=reason)
     assert attempts == ["openai-codex", "kimi"]
     assert result["grader"]["independent_vendor"] is True
-    assert result["grader"]["attempts"][0]["error"] == "RuntimeError"
+    assert result["grader"]["attempts"][0]["error"] == "RuntimeExecutionError"
 
 
 @pytest.mark.asyncio

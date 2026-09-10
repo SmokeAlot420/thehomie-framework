@@ -829,7 +829,7 @@ class CurriculumService:
         from orchestration.mailbox_service import MailboxService
         from orchestration.models import SendMessageInput
 
-        db = OrchestrationDB(config.ORCHESTRATION_DB_PATH)
+        db = OrchestrationDB(config.get_orchestration_db_path())
         try:
             message = MailboxService(db).send_message(
                 SendMessageInput(

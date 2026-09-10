@@ -86,7 +86,6 @@ from shared import (
 
 # Dedup configuration
 ALERT_TTL_HOURS = 8  # Hours before an alert expires from history
-DEFAULT_HEARTBEAT_CODEX_MODEL = "gpt-5.4-mini"
 
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "the business")
 BUSINESS_WEBSITE = os.getenv("BUSINESS_WEBSITE", os.getenv("BUSINESS_DOMAIN", ""))
@@ -1071,7 +1070,9 @@ def build_alert_entry(response_text: str, source_ids: list[str]) -> dict[str, st
 def _heartbeat_codex_model() -> str | None:
     """Return the Codex model override for heartbeat-only runtime calls."""
 
-    model = os.getenv("HEARTBEAT_CODEX_MODEL", DEFAULT_HEARTBEAT_CODEX_MODEL).strip()
+    # With no heartbeat-specific choice, the lane router uses the operator's
+    # canonical provider/model selection instead of an account-incompatible alias.
+    model = os.getenv("HEARTBEAT_CODEX_MODEL", "").strip()
     return model or None
 
 

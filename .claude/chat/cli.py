@@ -1211,11 +1211,11 @@ def _get_orchestration_services():
     from orchestration.mailbox_service import MailboxService
     from orchestration.observability import init_orchestration_observability
 
-    from config import ORCHESTRATION_DB_PATH
+    from config import get_orchestration_db_path
 
     ensure_directories()
     init_orchestration_observability()
-    db = OrchestrationDB(ORCHESTRATION_DB_PATH)
+    db = OrchestrationDB(get_orchestration_db_path())
     return db, ConvoyService(db), MailboxService(db)
 
 
@@ -1226,11 +1226,11 @@ def _get_team_services():
     from orchestration.observability import init_orchestration_observability
     from orchestration.team_service import TeamService
 
-    from config import ORCHESTRATION_DB_PATH
+    from config import get_orchestration_db_path
 
     ensure_directories()
     init_orchestration_observability()
-    db = OrchestrationDB(ORCHESTRATION_DB_PATH)
+    db = OrchestrationDB(get_orchestration_db_path())
     return db, TeamService(db), MailboxService(db)
 
 

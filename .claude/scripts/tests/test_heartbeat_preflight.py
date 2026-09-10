@@ -102,7 +102,7 @@ async def test_quiet_heartbeat_still_invokes_runtime(monkeypatch: pytest.MonkeyP
     request = captured_requests[0]
     assert request.task_name == "heartbeat"
     assert request.capability == TOOL_REASONING
-    assert request.fallback_model == "gpt-5.4-mini"
+    assert request.fallback_model is None
     assert "No urgent emails." in request.prompt
     assert "No active drafts pending review." in request.prompt
 
@@ -117,7 +117,7 @@ async def test_heartbeat_model_override_does_not_change_chat_model_env(
 
     await heartbeat.run_heartbeat(test_mode=True)
 
-    assert captured_requests[0].fallback_model == "gpt-5.4-mini"
+    assert captured_requests[0].fallback_model is None
     assert __import__("os").environ["SECOND_BRAIN_CODEX_MODEL"] == "gpt-5.5"
 
 

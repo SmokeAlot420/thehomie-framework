@@ -330,6 +330,7 @@ async def run_web_persona_turn(
         request, persona_id=persona_id, surface="web_persona_chat",
         origin_id=learning_hooks.incoming_origin(incoming, session_key), task=incoming.text,
     )
+    await asyncio.to_thread(learning_turn.capture_sources, {"prefetched_context": incoming.prefetched_context})
     request = learning_turn.request
     try:
         tools_degraded = False

@@ -3199,7 +3199,7 @@ def get_agent_tasks(persona_id: str, request: Request) -> dict:
     from orchestration.convoy_service import ConvoyService
     from orchestration.db import OrchestrationDB
 
-    db_path = Path(config.ORCHESTRATION_DB_PATH)
+    db_path = Path(config.get_orchestration_db_path())
     if not db_path.is_file():
         return {"tasks": []}
 
@@ -3248,7 +3248,7 @@ _WORK_STATUS_IDS = {c["id"] for c in _WORK_COLUMNS}
 def _open_work_orchestration_db(*, create: bool) -> Any | None:
     from orchestration.db import OrchestrationDB
 
-    db_path = Path(config.ORCHESTRATION_DB_PATH)
+    db_path = Path(config.get_orchestration_db_path())
     if not create and not db_path.is_file():
         return None
     if create:

@@ -57,6 +57,20 @@ agentsRoute.get('/api/agents/:id/learning/records', async (c) => {
   return c.json(translateLearning(result.json) as Record<string, unknown>, result.status as 200);
 });
 
+// Reports are Python-owned. GET inspects; explicit POST requests a model explanation.
+for (const method of ['GET', 'POST'] as const) {
+  agentsRoute.on(method, '/api/agents/:id/learning/report', async (c) => {
+    const id = inboundPersonaId(c.req.param('id'))!;
+    const query = new URLSearchParams();
+    for (const key of ['since', 'until']) {
+      const value = c.req.query(key);
+      if (value !== undefined) query.set(key, value);
+    }
+    const result = await authedFetchJson(`/api/agents/${encodeURIComponent(id)}/learning/report?${query}`, { method });
+    return c.json(translateLearning(result.json) as Record<string, unknown>, result.status as 200);
+  });
+}
+
 agentsRoute.get('/api/agents/:id/learning/records/:recordId', async (c) => {
   const id = inboundPersonaId(c.req.param('id'))!;
   const recordId = encodeURIComponent(c.req.param('recordId'));

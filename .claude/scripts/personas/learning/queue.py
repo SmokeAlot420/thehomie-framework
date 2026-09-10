@@ -14,6 +14,8 @@ from uuid import uuid4
 from .models import LearningError, canonical_json, is_credential_key
 
 PRIORITIES = {
+    "investigation": 12,
+    "cognition": 15,
     "observation": 10,
     "regression": 20,
     "correction": 30,
@@ -22,6 +24,24 @@ PRIORITIES = {
     "candidate": 45,
     "practice": 50,
 }
+
+COGNITIVE_REVISIT_PRIORITY = 11
+COGNITIVE_RECOVERY_PRIORITY = 55
+
+
+def cognitive_cycle_priority(cycle: dict) -> int:
+    """Host-owned urgency: finish due inquiries before new work and old recovery."""
+    if cycle.get("kind") != "cognitive_cycle":
+        raise ValueError("Cognitive priority requires a persisted cycle")
+    if cycle.get("phase") == "revisit":
+        return COGNITIVE_REVISIT_PRIORITY
+    provenance = [cycle.get("metadata", {}), *cycle.get("trigger_provenance", [])]
+    if str(cycle.get("origin_key", "")).startswith("recover:") or any(
+        isinstance(source, dict) and source.get("recovered_source_batch") is True
+        for source in provenance
+    ):
+        return COGNITIVE_RECOVERY_PRIORITY
+    return PRIORITIES["cognition"]
 
 
 class LearningQueue:
@@ -166,6 +186,7 @@ class LearningQueue:
         payload: dict | None = None,
         available_at: float | None = None,
         now: float | None = None,
+        priority: int | None = None,
     ) -> dict:
         if (
             kind not in PRIORITIES
@@ -174,10 +195,21 @@ class LearningQueue:
             or len(source_key) > 4096
         ):
             raise ValueError("Queue job requires a supported kind and stable source key")
+        allowed_priorities = {PRIORITIES[kind]}
+        if kind == "cognition":
+            allowed_priorities.update({COGNITIVE_REVISIT_PRIORITY, COGNITIVE_RECOVERY_PRIORITY})
+        if priority is not None and (
+            type(priority) is not int or priority not in allowed_priorities
+        ):
+            raise ValueError("Queue priority must come from the host policy for this job kind")
         instant = time.time() if now is None else now
         values = dict(payload or {})
         identifier = hashlib.sha256(f"{self.persona_id}\0{kind}\0{source_key}".encode()).hexdigest()
-        stage = "observe" if kind == "observation" else "propose"
+        stage = {
+            "observation": "observe",
+            "cognition": "cognitive_reason",
+            "investigation": "cognitive_observe",
+        }.get(kind, "propose")
         if kind in {"candidate", "requalification", "regression"} and values.get("candidate_id"):
             stage = "design"
         encoded = self._payload(values)
@@ -193,13 +225,22 @@ class LearningQueue:
                     kind,
                     source_key,
                     encoded,
-                    PRIORITIES[kind],
+                    PRIORITIES[kind] if priority is None else priority,
                     stage,
                     instant if available_at is None else available_at,
                     instant,
                     instant,
                 ),
             )
+            if priority is not None:
+                # Refresh old queued records through normal discovery. Preserve
+                # all checkpoints, backoff, failures, timestamps and claim state;
+                # an already running worker keeps the priority it claimed with.
+                db.execute(
+                    "UPDATE learning_jobs SET priority=? WHERE id=? AND persona_id=? "
+                    "AND status IN ('queued','deferred','retry') AND priority != ?",
+                    (priority, identifier, self.persona_id, priority),
+                )
             return self._row(
                 db.execute("SELECT * FROM learning_jobs WHERE id=?", (identifier,)).fetchone()
             )
@@ -216,7 +257,9 @@ class LearningQueue:
                 sql += " AND status NOT IN ('completed','failed')"
             return [
                 self._row(row)
-                for row in db.execute(sql + " ORDER BY priority,created_at,id", (self.persona_id,))
+                for row in db.execute(
+                    sql + " ORDER BY priority,available_at,created_at,id", (self.persona_id,)
+                )
             ]
 
     def claim(self, *, ttl_seconds: float | None = None, now: float | None = None) -> dict | None:
@@ -232,7 +275,9 @@ class LearningQueue:
             row = db.execute(
                 "SELECT * FROM learning_jobs WHERE persona_id=? "
                 "AND status IN ('queued','deferred','retry') AND available_at<=? "
-                "ORDER BY priority,created_at,id LIMIT 1",
+                # An old unavailable job must not retake every persona wake.
+                # Within one urgency class, work waiting longer to run goes first.
+                "ORDER BY priority,available_at,created_at,id LIMIT 1",
                 (self.persona_id, instant),
             ).fetchone()
             if row is None:
@@ -301,9 +346,40 @@ class LearningQueue:
                 ),
             ).rowcount
             if changed != 1:
-                raise RuntimeError("Learning job claim lost; refusing stale checkpoint")
+                from .errors import LearningDeferredError
+
+                raise LearningDeferredError("Learning job claim lost; refusing stale checkpoint")
             return self._row(
                 db.execute("SELECT * FROM learning_jobs WHERE id=?", (job["id"],)).fetchone()
+            )
+
+    def recover_failed(self, job_id: str, reason: str) -> dict | None:
+        """Caller classifies failure; preserve stage/payload and audit recovery."""
+        instant = time.time()
+        with self._db() as db:
+            row = db.execute(
+                "SELECT * FROM learning_jobs WHERE id=? AND persona_id=?", (job_id, self.persona_id)
+            ).fetchone()
+            if row is None or row["status"] != "failed":
+                return None
+            payload = json.loads(row["payload"])
+            history = list(payload.get("recovery_history", []))
+            history.append(
+                {
+                    "reason": str(reason)[:500],
+                    "recovered_at": instant,
+                    "prior_error": row["last_error"],
+                    "prior_failures": row["failures"],
+                }
+            )
+            payload["recovery_history"] = history
+            db.execute(
+                "UPDATE learning_jobs SET status='queued',failures=0,token=NULL,"
+                "expires_at=NULL,available_at=?,updated_at=?,payload=? WHERE id=?",
+                (instant, instant, self._payload(payload), job_id),
+            )
+            return self._row(
+                db.execute("SELECT * FROM learning_jobs WHERE id=?", (job_id,)).fetchone()
             )
 
 
@@ -314,19 +390,25 @@ def enqueue(
     source_key: str,
     payload: dict | None = None,
     available_at: float | None = None,
+    priority: int | None = None,
 ) -> dict | None:
     """Single trigger entrypoint, respecting the current persona's learning disable."""
     if not service.enabled():
         return None
     return LearningQueue(service).enqueue(
-        kind, source_key, payload=payload, available_at=available_at
+        kind, source_key, payload=payload, available_at=available_at, priority=priority
     )
 
 
 def is_learning_source(experience: dict) -> bool:
     """Host-observed paper work is practice with external evidence, not model rehearsal."""
     metadata = experience.get("metadata", {})
-    if metadata.get("learning_role"):
+    if (
+        metadata.get("learning_role")
+        or metadata.get("cognitive_generated")
+        or metadata.get("context_only")
+        or experience.get("surface") in {"learning_worker", "cognitive_worker"}
+    ):
         return False
     return experience.get("mode") in {"real", "study", "backfill"} or (
         experience.get("mode") == "practice"
@@ -399,7 +481,19 @@ def enqueue_observation_learning(service, observation: dict) -> None:
 def notify_record(service, record: dict) -> None:
     """Record-persistence notification; no model calls and no process launches."""
     kind = record.get("kind")
-    if kind == "expectation":
+    if kind == "cognitive_cycle":
+        enqueue(
+            service,
+            "cognition",
+            source_key=record["id"],
+            payload={"cycle_id": record["id"]},
+            priority=cognitive_cycle_priority(record),
+        )
+    elif kind == "investigation":
+        from .cognition import discover_cognitive_work
+
+        discover_cognitive_work(service, recover_sources=False)
+    elif kind == "expectation":
         try:
             instant = datetime.fromisoformat(record.get("check_by", "").replace("Z", "+00:00"))
             due = instant.timestamp() if instant.tzinfo is not None else None

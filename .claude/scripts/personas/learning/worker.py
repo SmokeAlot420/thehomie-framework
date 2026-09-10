@@ -13,7 +13,9 @@ import json
 import logging
 import math
 import os
+import sqlite3
 import time
+from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,12 @@ from personas.learning.models import LearningError, learning_model_budget
 from runtime import activity
 from runtime import errors as runtime_errors
 
+from .errors import (
+    LearningDeferred,
+    LearningDeferredError,
+    LearningOutputError,
+    LearningUnavailableError,
+)
 from .queue import (
     LearningQueue,
     enqueue,
@@ -33,11 +41,14 @@ from .queue import (
 _logger = logging.getLogger(__name__)
 
 
-class LearningDeferredError(RuntimeError):
-    """No failed attempt: an interactive turn, pause, or lost lease takes priority."""
+# Installed per worker task; the evaluator checks it at every durable boundary.
+_stage_guard: ContextVar = ContextVar("learning_stage_guard", default=None)
 
 
-LearningDeferred = LearningDeferredError
+def _check_stage_boundary():
+    guard = _stage_guard.get()
+    if guard is not None:
+        guard()
 
 
 def _configured_number(name: str, default: float) -> float:
@@ -62,6 +73,9 @@ def discover_work(service) -> int:
     queue = LearningQueue(service)
     prior_jobs = queue.list(include_finished=True)
     before = len(prior_jobs)
+    from .lifecycle_outbox import replay_pending
+
+    replay_pending(service)
     observations = service.store.all("observation")
     for expectation in service.store.all("expectation"):
         observed = [o for o in observations if o.get("expectation_id") == expectation["id"]]
@@ -152,7 +166,134 @@ def discover_work(service) -> int:
                     source_key=candidate["id"],
                     payload={"candidate_id": candidate["id"]},
                 )
+    from .cognition import discover_cognitive_work
+
+    discover_cognitive_work(service)
+    recover_learning_work(service)
     return len(queue.list(include_finished=True)) - before
+
+
+def recover_learning_work(service) -> dict:
+    """Recover justified infrastructure failures and requalify affected v2 work.
+
+    This is append-only for evidence. Queue recovery is an audited control-state
+    transition; genuine unsupported/no-improvement decisions are never reopened.
+    """
+    from .evaluation import EVALUATOR_VERSION
+
+    if not service.enabled():
+        return {"recovered": [], "requalification": []}
+    queue = LearningQueue(service)
+    records = service.store.all("evaluation")
+    jobs = queue.list(include_finished=True)
+    recovered, scheduled = [], []
+    recovered_candidates = set()
+    recoverable_types = {
+        "LearningDeferred",
+        "LearningDeferredError",
+        "LearningUnavailableError",
+        "LearningOutputError",
+        "RuntimeLayerError",
+        "RuntimeConfigError",
+        "RuntimeUnsupportedCapabilityError",
+        "RuntimeRetryableError",
+        "RuntimeExecutionError",
+        "RuntimeCallerToolTransportError",
+        "TimeoutError",
+        "CancelledError",
+        "ConnectionError",
+    }
+
+    def classified(message):
+        # Read historical saved types; do not guess from arbitrary error prose.
+        message = str(message)
+        prefix = "RuntimeError: Learning evaluation could not complete: "
+        if message.startswith(prefix):
+            message = message[len(prefix) :]
+        return message.partition(":")[0] in recoverable_types
+
+    for job in jobs:
+        if job["status"] != "failed":
+            continue
+        if job["payload"].get("failure_class") in recoverable_types or classified(
+            job.get("last_error", "")
+        ):
+            queue.recover_failed(job["id"], reason="typed_infrastructure_recovery_v3")
+            recovered.append(job["id"])
+            if job["payload"].get("candidate_id"):
+                recovered_candidates.add(job["payload"]["candidate_id"])
+    for candidate in service.store.all("candidate"):
+        candidate_records = [r for r in records if r.get("candidate_id") == candidate["id"]]
+        if any(
+            r.get("evaluator_version") == EVALUATOR_VERSION
+            and not r.get("errors")
+            and r.get("mode") in {"qualification", "knowledge_support"}
+            for r in candidate_records
+        ):
+            continue
+        affected = [
+            r
+            for r in candidate_records
+            if r.get("evaluator_version", (r.get("receipt") or {}).get("evaluator_version"))
+            == "persona-learning-paired-v2"
+            and (
+                r.get("reason") == "new_hard_failure"
+                or any(classified(error) for error in r.get("errors", []))
+            )
+        ]
+        active = next(
+            (
+                a
+                for a in service.store.all("activation")
+                if a.get("candidate_id") == candidate["id"]
+                and a.get("status") in {"active_provisional", "active_supported"}
+            ),
+            None,
+        )
+        if not affected and not (
+            active
+            and any(
+                r.get("evaluator_version") == "persona-learning-paired-v2"
+                for r in candidate_records
+            )
+        ):
+            continue
+        if candidate.get("status") in {"superseded", "retired", "retracted", "needs_reassessment"}:
+            continue
+        if candidate["id"] in recovered_candidates or any(
+            j["payload"].get("candidate_id") == candidate["id"]
+            and j["status"] not in {"completed", "failed"}
+            and (
+                (j["payload"].get("manifest") or {}).get("evaluator_version")
+                == "persona-learning-paired-v2"
+                or j["payload"].get("design_reason") == "evaluator_version_changed"
+                or any(
+                    h.get("reason") == "typed_infrastructure_recovery_v3"
+                    for h in j["payload"].get("recovery_history", [])
+                )
+            )
+            for j in jobs
+        ):
+            # The original resumable job crosses the version boundary itself;
+            # do not create a competing qualification for the same migration.
+            continue
+        payload = {
+            "candidate_id": candidate["id"],
+            "migration": EVALUATOR_VERSION,
+            "design_revision": 1,
+            "force_qualification": True,
+        }
+        if active:
+            payload["activation_id"] = active["id"]
+        job = enqueue(
+            service,
+            "requalification",
+            source_key=f"evaluator:{EVALUATOR_VERSION}:{candidate['id']}",
+            payload=payload,
+        )
+        if job:
+            scheduled.append(job["id"])
+    return {"recovered": recovered, "requalification": scheduled}
 
 
 def _evidence(service, experience_id: str | None) -> list[dict]:
@@ -180,9 +321,12 @@ def _parse_json(text: str) -> dict:
     stripped = text.strip()
     if stripped.startswith("```"):
         stripped = stripped.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    value = json.loads(stripped)
+    try:
+        value = json.loads(stripped)
+    except (ValueError, TypeError) as exc:
+        raise LearningOutputError("Learning role must return valid JSON") from exc
     if not isinstance(value, dict):
-        raise ValueError("Learning role must return a JSON object")
+        raise LearningOutputError("Learning role must return a JSON object")
     return value
 
 
@@ -191,8 +335,16 @@ async def _runtime_role(service, job: dict, role: str, prompt: str) -> tuple[dic
     import config
     from runtime import registry
     from runtime.base import RuntimeRequest
+    from runtime.selection import resolve_runtime_selection
 
+    selection = resolve_runtime_selection()
+    model_hint = (
+        config.get_background_models()["quality"] if selection.lane == "claude_native" else None
+    )
+    _check_stage_boundary()
     origin = f"learning:{job['id']}:{role}"
+    if job["payload"].get("output_revision"):
+        origin += f":output-{int(job['payload']['output_revision'])}"
     if role == "design" and job["payload"].get("design_revision"):
         origin += f":revision-{int(job['payload']['design_revision'])}"
     experience = service.capture_experience(
@@ -202,15 +354,21 @@ async def _runtime_role(service, job: dict, role: str, prompt: str) -> tuple[dic
         mode="evaluation" if role == "design" else "practice",
         metadata={"learning_role": role, "job_id": job["id"]},
     )
-    for execution in service.store.all("execution"):
-        if execution.get("experience_id") == experience["id"] and execution.get("response_text"):
-            return _parse_json(execution["response_text"]), execution
+    executions = [
+        r for r in service.store.all("execution") if r.get("experience_id") == experience["id"]
+    ]
+    for execution in executions:
+        if execution.get("response_text"):
+            try:
+                return _parse_json(execution["response_text"]), execution
+            except LearningOutputError:
+                continue  # Keep invalid output as history, never pin retries to it.
     result = await registry.run_with_fallback(
         RuntimeRequest(
             prompt=prompt,
             cwd=service.target.memory_dir,
             task_name=f"persona_learning_{role}",
-            model=config.get_background_models()["quality"],
+            model=model_hint,
             model_only=True,
             allowed_tools=[],
             disallowed_tools=["*"],
@@ -224,7 +382,7 @@ async def _runtime_role(service, job: dict, role: str, prompt: str) -> tuple[dic
         )
     )
     if result.tool_calls or result.tool_call_count or result.tool_names_used:
-        raise ValueError("Learning role returned tool activity on a model-only request")
+        raise LearningOutputError("Learning role returned tool activity on a model-only request")
     receipt = service.record_execution(
         experience["id"],
         {
@@ -237,7 +395,7 @@ async def _runtime_role(service, job: dict, role: str, prompt: str) -> tuple[dic
             "cost_usd": result.cost_usd,
             "learning_role": role,
         },
-        attempt_key=origin,
+        attempt_key=origin + f":attempt-{len(executions) + 1}",
     )
     return _parse_json(result.text), receipt
 
@@ -280,15 +438,20 @@ async def _propose(service, job: dict) -> tuple[str, dict]:
         )
     )
     result, provenance = await _runtime_role(service, job, "propose", prompt)
+    if "candidate" not in result:
+        raise LearningOutputError("Proposer omitted candidate field")
     candidate = result.get("candidate")
     if candidate is None:
         return "done", {**payload, "reason": str(result.get("reason", "no useful change"))[:500]}
     if not isinstance(candidate, dict):
-        raise ValueError("Proposer candidate must be an object")
-    if set(candidate.get("evidence_ids", []) + candidate.get("counterevidence_ids", [])) - set(
-        allowed_ids
-    ):
-        raise ValueError("Proposer cited evidence outside its source experience")
+        raise LearningOutputError("Proposer candidate must be an object")
+    try:
+        references = candidate.get("evidence_ids", []) + candidate.get("counterevidence_ids", [])
+        invalid = set(references) - set(allowed_ids)
+    except (TypeError, ValueError) as exc:
+        raise LearningOutputError("Invalid proposal evidence references") from exc
+    if invalid:
+        raise LearningOutputError("Proposer cited evidence outside its source experience")
     candidate.update(
         worker_job_id=job["id"],
         producer_runtime={
@@ -305,7 +468,10 @@ async def _propose(service, job: dict) -> tuple[str, dict]:
         if not prior or prior.get("kind") != "candidate":
             raise ValueError("Prior learning candidate disappeared")
         candidate["prior_candidate_id"] = prior["id"]
-    created = service.propose_candidate(candidate, source_key=f"learning-job:{job['id']}")
+    try:
+        created = service.propose_candidate(candidate, source_key=f"learning-job:{job['id']}")
+    except LearningError as exc:
+        raise LearningOutputError(f"Invalid candidate contract: {exc}") from exc
     return "design", {**payload, "candidate_id": created["id"]}
 
 
@@ -348,8 +514,16 @@ async def _design(service, job: dict) -> tuple[str, dict]:
         "or supply a candidate method. Include situations inside and outside the described "
         "applicability, with success rubrics based on domain outcomes. Return JSON "
         "{cases:[{id:string,prompt:string,expected:string,applicable:boolean,context:string,"
-        "required_substrings:[],forbidden_substrings:[]}],primary_metric:string,"
-        "metric_rubric:string}. The rubric must evaluate task correctness, not method wording. "
+        "criteria:[{id:string,definition:string,severity:hard|advisory,"
+        "applicability:all|applicable|counterexample,check:semantic|json_equals|numeric_min|numeric_max,"
+        "json_path:string,value:any}],required_substrings:[],forbidden_substrings:[],"
+        "exact_text_requirement:string}],primary_metric:string,metric_rubric:string}. "
+        "Freeze explicit criterion IDs and definitions NOW, before seeing trial answers. "
+        "Hard criteria are actual task requirements, not stylistic preferences or minor cautions. "
+        "Use semantic, numeric or structured checks. Substring checks are only allowed if the "
+        "task explicitly requires exact text: quote that actual task instruction verbatim in "
+        "exact_text_requirement; otherwise leave it and substring arrays empty. "
+        "The rubric must evaluate task correctness, not method wording. "
         "Cases are simulated evaluation, "
         "never real evidence. Do not reuse excluded case situations or IDs.\n"
         + json.dumps(
@@ -371,27 +545,33 @@ async def _design(service, job: dict) -> tuple[str, dict]:
     designed, runtime = await _runtime_role(service, job, "design", prompt)
     runtime = payload.get("target_runtime") or runtime
     if len(designed.get("cases", [])) != 12:
-        raise ValueError("Default learning worker requires exactly 12 qualification cases")
+        raise LearningOutputError("Default learning worker requires exactly 12 qualification cases")
     if not runtime.get("model") or not runtime.get("provider"):
-        raise ValueError("Qualification requires an observed concrete runtime/model")
-    cases = tuple(QualificationCase(**case) for case in designed["cases"])
+        raise LearningUnavailableError("Qualification requires an observed concrete runtime/model")
+    try:
+        cases = tuple(QualificationCase(**case) for case in designed["cases"])
+    except (TypeError, ValueError) as exc:
+        raise LearningOutputError(f"Invalid qualification case: {exc}") from exc
     if any(case.fingerprint in set(exposed) for case in cases):
         return _restart_design(payload, "qualification_case_previously_exposed")
-    manifest = QualificationManifest(
-        profile_id=service.target.persona_id,
-        candidate_hash=candidate["content_hash"],
-        baseline_content=candidate.get("baseline_content", ""),
-        baseline_version=candidate.get("baseline_version", "initial"),
-        cases=cases,
-        model=runtime["model"],
-        runtime_lane=runtime.get("runtime_lane") or "generic_runtime",
-        provider=runtime["provider"],
-        max_budget_usd=learning_model_budget(),
-        primary_metric=designed.get("primary_metric", "task_quality"),
-        metric_rubric=designed.get("metric_rubric", "Task correctness and usefulness"),
-        proposal_case_ids=tuple(r["id"] for r in evidence),
-        excluded_fingerprints=tuple(exposed),
-    )
+    try:
+        manifest = QualificationManifest(
+            profile_id=service.target.persona_id,
+            candidate_hash=candidate["content_hash"],
+            baseline_content=candidate.get("baseline_content", ""),
+            baseline_version=candidate.get("baseline_version", "initial"),
+            cases=cases,
+            model=runtime["model"],
+            runtime_lane=runtime.get("runtime_lane") or "generic_runtime",
+            provider=runtime["provider"],
+            max_budget_usd=learning_model_budget(),
+            primary_metric=designed.get("primary_metric", "task_quality"),
+            metric_rubric=designed.get("metric_rubric", "Task correctness and usefulness"),
+            proposal_case_ids=tuple(r["id"] for r in evidence),
+            excluded_fingerprints=tuple(exposed),
+        )
+    except (TypeError, ValueError) as exc:
+        raise LearningOutputError(f"Invalid qualification manifest: {exc}") from exc
     manifest = freeze_context_bundles(service, candidate, manifest)
     return "evaluate", {**payload, "manifest": asdict(manifest)}
 
@@ -400,8 +580,13 @@ async def process_stage(service, job: dict) -> tuple[str, dict]:
     """The real pipeline; injection in queue tests substitutes this boundary only."""
     from . import evaluation, promotion
 
+    _check_stage_boundary()
     stage = job["stage"]
     payload = dict(job["payload"])
+    if job["kind"] in {"cognition", "investigation"}:
+        from .cognition import process_cognitive_stage
+
+        return await process_cognitive_stage(service, job)
     if job["kind"] == "regression" and payload.get("activation_id"):
         candidate = service.get_record(payload.get("candidate_id", "")) or {}
         supporting = [
@@ -497,6 +682,7 @@ async def process_stage(service, job: dict) -> tuple[str, dict]:
     if stage == "evaluate":
 
         def checkpoint(*_args, **_kwargs):
+            _check_stage_boundary()
             if not service.enabled() or activity.foreground_active():
                 raise LearningDeferred("Foreground work or paused learning; qualification yields")
 
@@ -505,11 +691,13 @@ async def process_stage(service, job: dict) -> tuple[str, dict]:
             if payload.get("manifest")
             else None
         )
+        if manifest is not None and manifest.evaluator_version != evaluation.EVALUATOR_VERSION:
+            return _restart_design(payload, "evaluator_version_changed")
         receipt = await evaluation.evaluate_candidate(
             service, payload["candidate_id"], manifest=manifest, checkpoint=checkpoint
         )
         if receipt.get("errors"):
-            raise RuntimeError(
+            raise LearningOutputError(
                 "Learning evaluation could not complete: " + "; ".join(receipt["errors"])[:400]
             )
         payload["evaluation_id"] = receipt["id"]
@@ -629,6 +817,45 @@ async def run_worker(
             lost = True
             _logger.warning("Learning worker lease renewal failed", exc_info=True)
 
+    def guard():
+        nonlocal lost
+        if lost:
+            raise LearningDeferred("Worker lease lost before checkpoint")
+        if not service.enabled() or activity.foreground_active(path=activity_path):
+            raise LearningDeferred("Foreground work or paused learning; qualification yields")
+        # Check actual claim ownership, not just the periodic renewal task's
+        # cached flag. An expired lease cannot authorize another provider call.
+        try:
+            owned = activity.renew_lease(lease, path=activity_path)
+            if current is not None:
+                owned = owned and queue.renew(current)
+        except (OSError, sqlite3.OperationalError) as exc:
+            lost = True
+            raise LearningUnavailableError("Learning lease verification unavailable") from exc
+        if not owned:
+            lost = True
+            raise LearningDeferred("Worker lease lost before checkpoint")
+
+    def defer_job(exc, *, delay=60, revise_output=False):
+        from security.redact import redact
+
+        payload = dict(current["payload"])
+        payload["failure_class"] = type(exc).__name__
+        if revise_output and current["stage"] in {"propose", "design"}:
+            payload["output_revision"] = int(payload.get("output_revision", 0)) + 1
+        try:
+            queue.finish_stage(
+                current,
+                status="deferred",
+                payload=payload,
+                error=f"{type(exc).__name__}: {redact(str(exc))}",
+                delay_seconds=delay,
+            )
+        except LearningDeferredError:
+            # The new claimant owns recovery. Never mutate its checkpoint.
+            pass
+
+    guard_token = _stage_guard.set(guard)
     renewal = asyncio.create_task(renew())
     try:
         while stages < maximum:
@@ -645,6 +872,7 @@ async def run_worker(
                 )
                 if lost:
                     raise LearningDeferred("Worker lease lost before checkpoint")
+                payload.pop("failure_class", None)
                 queue.finish_stage(
                     current,
                     stage=stage,
@@ -652,31 +880,24 @@ async def run_worker(
                     status="completed" if stage == "done" else "queued",
                 )
                 stages += 1
-            except LearningDeferred as exc:
-                queue.finish_stage(current, status="deferred", error=str(exc), delay_seconds=60)
+            except LearningDeferredError as exc:
+                defer_job(exc, revise_output=isinstance(exc, LearningOutputError))
                 return {"status": "deferred", "stages": stages}
-            except TimeoutError:
-                # Cancels the runtime through its normal provider cleanup path
-                # before the parent's subprocess safety timeout. Qualification
-                # pairs already recorded by the evaluator resume next wake.
-                queue.finish_stage(
-                    current,
-                    status="deferred",
-                    error="Stage time budget exhausted",
-                    delay_seconds=60,
-                )
+            except asyncio.CancelledError as exc:
+                defer_job(exc)
+                raise
+            except TimeoutError as exc:
+                # Inference is cancelled via the runtime cleanup path. Completed
+                # trial/support/comparison records resume unchanged next wake.
+                defer_job(exc)
                 return {"status": "deferred", "stages": stages}
-            except runtime_errors.RuntimeLayerError as exc:
-                # Provider quota/auth/transport outages are not evidence that a
-                # lesson failed. Keep its checkpoint retryable after recovery.
-                from security.redact import redact
-
-                queue.finish_stage(
-                    current,
-                    status="deferred",
-                    error=f"{type(exc).__name__}: {redact(str(exc))}",
-                    delay_seconds=600,
-                )
+            except (
+                runtime_errors.RuntimeLayerError,
+                ConnectionError,
+                OSError,
+                sqlite3.OperationalError,
+            ) as exc:
+                defer_job(exc, delay=600)
                 return {"status": "deferred", "stages": stages, "job_id": current["id"]}
             except Exception as exc:
                 if not service.enabled():
@@ -705,6 +926,7 @@ async def run_worker(
                 current = None
         return {"status": "checkpointed", "stages": stages}
     finally:
+        _stage_guard.reset(guard_token)
         renewal.cancel()
         try:
             await renewal

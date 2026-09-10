@@ -40,6 +40,7 @@ class ClearLifecycleResult:
     # "cron" / "tool" / "hook") — distinct from the EVENT label `source`
     # ("clear"). Only interactive-trigger events prove operator presence.
     trigger_source: str = "interactive"
+    session_retained: bool = False
 
     def add(self, step: str, status: str, detail: str = "") -> None:
         self.events.append(LifecycleEvent(step=step, status=status, detail=detail))
@@ -228,6 +229,23 @@ def clear_session_with_lifecycle(
         result.add("persist_transcript", "ok", str(result.transcript_path))
     except Exception as exc:  # noqa: BLE001
         _record_failure(result, "persist_transcript", exc)
+
+    # The retained transcript is the recovery source even if the model is down.
+    try:
+        import personas
+        from personas.learning import hooks as learning_hooks
+        if result.transcript_path is not None:
+            receipt = learning_hooks.enqueue_session_debrief(
+                persona_id=personas.get_active_profile_name() or "default",
+                session_id=session_id, surface="session_clear",
+                transcript=result.transcript_path.read_text(encoding="utf-8"), reason=source)
+            result.add("cognitive_debrief", receipt["status"])
+    except Exception as exc:
+        _record_failure(result, "cognitive_debrief", exc)
+        result.session_retained = True
+        result.add("session_delete", "error", "retained: debrief durability unavailable")
+        _log_result(result)
+        return result
 
     payload = {
         "session_id": session_id,

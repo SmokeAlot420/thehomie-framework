@@ -276,6 +276,16 @@ class LearningService:
                         reason="supporting observation corrected",
                         key=f"corrected:{record['id']}",
                     )
+            for understanding in self.store.all("understanding"):
+                if supersedes in understanding.get("evidence_ids", []) + understanding.get(
+                    "counterevidence_ids", []
+                ):
+                    self.set_status(
+                        understanding["id"],
+                        "needs_reassessment",
+                        reason="supporting observation corrected",
+                        key=f"corrected:{record['id']}",
+                    )
         if data.get("expectation_id"):
             self.set_status(
                 data["expectation_id"],
@@ -519,6 +529,211 @@ class LearningService:
         methods = self._context_methods(task, max_chars=max_chars)
         return compile_context(task, methods, max_chars=max_chars)
 
+    def enqueue_cognitive_cycle(
+        self,
+        phase: str,
+        origin_key: str,
+        evidence_ids: list[str],
+        *,
+        experience_id: str | None = None,
+        investigation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from .models import COGNITIVE_PHASES
+        from .queue import is_learning_source
+
+        self._require_enabled()
+        if phase not in COGNITIVE_PHASES:
+            raise LearningError("unknown cognitive phase")
+        records = self.cognitive_evidence_records(evidence_ids, allow_superseded=phase == "revisit")
+        for record in records:
+            if record["kind"] not in {"experience", "execution", "observation", "expectation"}:
+                raise LearningError(
+                    "cognitive input must reference observed work, not generated reasoning"
+                )
+            parent = (
+                record
+                if record["kind"] == "experience"
+                else self._owned(record["experience_id"], "experience")
+            )
+            if not is_learning_source(parent):
+                raise LearningError("generated practice or evaluation cannot initiate cognition")
+        if experience_id:
+            experience = self._owned(experience_id, "experience")
+            if not is_learning_source(experience):
+                raise LearningError("generated experience cannot initiate cognition")
+        if investigation_id:
+            self._owned(investigation_id, "investigation")
+        if not records:
+            raise LearningError("a cognitive cycle needs actual source evidence")
+        provenance = _safe(metadata or {})
+        if provenance.get("cognitive_generated") or provenance.get("learning_role"):
+            raise LearningError("generated output cannot recursively initiate cognition")
+        values = {
+            "phase": phase,
+            "origin_key": _text(origin_key, "origin_key", maximum=1024),
+            "evidence_ids": sorted(set(evidence_ids)),
+            "experience_id": experience_id,
+            "investigation_id": investigation_id,
+            "metadata": {},
+            "status": "pending",
+        }
+        key = f"{phase}:{origin_key}:{content_hash(values['evidence_ids'])}"
+        record = self.store.put("cognitive_cycle", values, key=key)
+        self.store.event(
+            record["id"], "cognitive_trigger", provenance, key="trigger:" + content_hash(provenance)
+        )
+        record = self._owned(record["id"])
+        self._notify(record)
+        return record
+
+    def cognitive_evidence_records(
+        self, ids: list[str], *, allow_superseded: bool = False
+    ) -> list[dict]:
+        """Original corrected observations remain visible during a revisit only."""
+        if not isinstance(ids, list) or any(not isinstance(item, str) for item in ids):
+            raise LearningError("cognitive evidence must be owned record IDs")
+        records = [self._owned(record_id) for record_id in ids]
+        if not allow_superseded and any(row.get("status") == "superseded" for row in records):
+            raise LearningError("superseded evidence requires a current observation")
+        return records
+
+    @_atomic
+    def record_understanding(self, payload: dict[str, Any], *, source_key: str) -> dict[str, Any]:
+        from .models import UNDERSTANDING_TYPES
+
+        self._require_enabled()
+        data = _safe(dict(payload))
+        if data.get("understanding_type") not in UNDERSTANDING_TYPES:
+            raise LearningError("unknown understanding type")
+        for field in ("title", "content", "scope", "uncertainty"):
+            data[field] = _text(data.get(field), field, maximum=8000)
+        for field in ("evidence_ids", "counterevidence_ids"):
+            data.setdefault(field, [])
+            self.evidence_records(data[field])
+        if not data["evidence_ids"]:
+            raise LearningError("understanding must identify its originating evidence")
+        if data.get("status", "tentative") != "tentative":
+            raise LearningError("source support must be established by the support evaluator")
+        data["status"] = "tentative"
+        if data.get("cycle_id"):
+            self._owned(data["cycle_id"], "cognitive_cycle")
+        predecessor = data.get("predecessor_id")
+        if predecessor:
+            old = self._owned(predecessor, "understanding")
+            if old["understanding_type"] != data["understanding_type"]:
+                raise LearningError("understanding revision must preserve its type")
+        data.pop("content_hash", None)
+        data["content_hash"] = content_hash(data)
+        record = self.store.put("understanding", data, key=source_key)
+        if predecessor:
+            self.set_status(
+                predecessor,
+                "superseded",
+                reason="understanding revised",
+                key=f"revision:{record['id']}",
+            )
+        return record
+
+    def open_investigation(self, payload: dict[str, Any], *, source_key: str) -> dict[str, Any]:
+        from .models import validate_investigation_trigger
+
+        self._require_enabled()
+        data = _safe(dict(payload))
+        for field in ("question", "why", "domain"):
+            data[field] = _text(data.get(field), field, maximum=4000)
+        data["trigger"] = validate_investigation_trigger(data.get("trigger"))
+        data.setdefault("evidence_ids", [])
+        evidence = self.evidence_records(data["evidence_ids"])
+        if not evidence:
+            raise LearningError("investigation requires originating evidence")
+        if data.get("cycle_id"):
+            self._owned(data["cycle_id"], "cognitive_cycle")
+        experience_id = data.get("experience_id") or next(
+            (
+                item.get("experience_id") or (item["id"] if item["kind"] == "experience" else None)
+                for item in evidence
+            ),
+            None,
+        )
+        self._owned(experience_id, "experience")
+        data.update(experience_id=experience_id, status="open")
+        data.pop("content_hash", None)
+        data["content_hash"] = content_hash(data)
+        record = self.store.put("investigation", data, key=source_key)
+        self._notify(record)
+        return record
+
+    @_atomic
+    def transition_investigation(
+        self,
+        investigation_id: str,
+        status: str,
+        *,
+        source_key: str,
+        reason: str = "",
+        conclusion: str = "",
+        evidence_ids: list[str] | None = None,
+        next_check_at: str | None = None,
+    ) -> dict[str, Any]:
+        record = self._owned(investigation_id, "investigation")
+        if status not in {"open", "due", "pending", "blocked", "completed", "cancelled"}:
+            raise LearningError("invalid investigation status")
+        if record["status"] in {"completed", "cancelled"} and status != record["status"]:
+            raise LearningError("a closed investigation requires a new investigation")
+        data = {
+            "status": status,
+            "reason": str(reason)[:4000],
+            "conclusion": str(conclusion)[:8000],
+        }
+        if evidence_ids is not None:
+            self.cognitive_evidence_records(evidence_ids, allow_superseded=True)
+            data["latest_evidence_ids"] = list(dict.fromkeys(evidence_ids))
+        if next_check_at:
+            data["next_check_at"] = _instant(next_check_at, "next_check_at").isoformat()
+        self.store.event(investigation_id, "investigation_transition", data, key=source_key)
+        return self._owned(investigation_id)
+
+    def render_cognitive_context(
+        self,
+        task: str,
+        *,
+        max_chars: int = 4000,
+        model: str | None = None,
+    ) -> LearningContext:
+        from .context import compile_cognitive_context
+
+        if not self.enabled() or max_chars <= 0:
+            return LearningContext()
+        understanding = [
+            r
+            for r in self.store.all("understanding")
+            if r.get("status") in {"tentative", "supported"}
+        ]
+        investigations = [
+            r
+            for r in self.store.all("investigation")
+            if r.get("status") not in {"completed", "cancelled"}
+        ]
+        valid = []
+        evidence = self.store.many(
+            list(
+                {
+                    ref
+                    for row in understanding
+                    for ref in row.get("evidence_ids", []) + row.get("counterevidence_ids", [])
+                }
+            )
+        )
+        for row in understanding:
+            if all(
+                evidence.get(ref, {}).get("status") != "superseded" and ref in evidence
+                for ref in row.get("evidence_ids", []) + row.get("counterevidence_ids", [])
+            ):
+                valid.append(row)
+        methods = self.render_context(task, max_chars=min(2000, max_chars // 2), model=model)
+        return compile_cognitive_context(task, valid, investigations, methods, max_chars=max_chars)
+
     def record_context_receipt(
         self,
         experience_id: str,
@@ -535,8 +750,20 @@ class LearningService:
             raise LearningError("invalid context receipt phase")
         included, dropped = [], []
         for version in context.versions:
+            if version.get("record_kind") in {"understanding", "investigation"}:
+                owned = self._owned(version.get("record_id"), version["record_kind"])
+                if version.get("content_hash") != owned.get("content_hash"):
+                    raise LearningError("cognitive context version differs from retained record")
             reference = {
-                key: version[key] for key in ("candidate_id", "activation_id", "content_hash")
+                key: version[key]
+                for key in (
+                    "candidate_id",
+                    "activation_id",
+                    "content_hash",
+                    "record_kind",
+                    "record_id",
+                )
+                if key in version
             }
             block = version.get("rendered_block", version["content"])
             (included if block in rendered_prompt else dropped).append(reference)
@@ -621,7 +848,13 @@ class LearningService:
             row["record_id"] = next(
                 (
                     payload[key]
-                    for key in ("candidate_id", "expectation_id", "experience_id")
+                    for key in (
+                        "cycle_id",
+                        "investigation_id",
+                        "candidate_id",
+                        "expectation_id",
+                        "experience_id",
+                    )
                     if payload.get(key) and self.store.get(payload[key]) is not None
                 ),
                 None,

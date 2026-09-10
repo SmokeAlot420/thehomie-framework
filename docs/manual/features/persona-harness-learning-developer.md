@@ -1,6 +1,7 @@
 # Extend Persona Harness Learning
 
-Introduced in v1.8.0. This guide covers framework integration; see the
+Harness introduced in v1.8.0; continuous cognition introduced in v1.9.0.
+This guide covers framework integration; see the
 [operator guide](persona-harness-learning.md) for inspection, pause, and rollback.
 
 ## Lifecycle And Ownership
@@ -18,13 +19,220 @@ flowchart TD
     C --> D[Execution and context receipts]
     D --> E[Domain observation or correction]
     E --> Q[Durable learning queue]
-    Q --> F[Existing idle wake and checkpointed worker]
-    F --> G[Conditional candidate and frozen evaluation]
+    Q --> F[Supervised minute dispatcher and existing recovery wakes]
+    F --> I[Persona reasons about the evidence]
+    I --> U[Retain understanding and open investigations]
+    U --> B
+    U --> V[Due observation with original and fresh evidence]
+    V --> I
+    I --> G[Conditional procedure candidate and frozen evaluation]
     G --> H[Qualified provisional method]
     H --> B
     E --> R[Reassess, revise, or rollback]
     R --> F
 ```
+
+## Continuous Cognition Contract
+
+The same profile-local journal stores `cognitive_cycle`, `understanding`, and
+`investigation` alongside the original experience/method records. The service
+owns transitions. Runtime and domain adapters provide actual observations and
+invoke the service; they do not create a second ledger or a provider-specific
+learning policy.
+
+- `enqueue_cognitive_cycle(phase, origin_key, evidence_ids, *, experience_id,
+  investigation_id, metadata)` accepts `reorient`, `interpret`, `reflect`, or
+  `revisit`. Its stable event identity coalesces duplicate hooks. Evidence must
+  belong to real work; generated reflection, evaluation, and practice cannot
+  recursively initiate another cycle.
+- `record_understanding(payload, *, source_key)` retains a tentative concept,
+  interpretation, belief, self-assessment, or source assessment. Supply title,
+  content, scope, uncertainty, and owned evidence IDs. A revision references its
+  predecessor. Support evaluation can later establish supported knowledge;
+  retained understanding does not automatically authorize a working procedure.
+- `open_investigation(payload, *, source_key)` persists question, why, domain,
+  evidence, and a validated trigger. `transition_investigation()` appends progress,
+  new evidence, next-check time, or a conclusion. A closed inquiry requires a
+  new inquiry rather than silently reopening history.
+- `render_cognitive_context(task, ...)` selects relevant understanding and open
+  investigations within the existing prompt budget. Context receipts include
+  `record_kind`, `record_id`, and `content_hash` for these versions; methods retain
+  their candidate/activation references. Only actual executed inclusion is
+  evidence that the version reached a completed request.
+
+Completed reasoning is persisted before retention/support checkpoints so a
+retry can reuse the actual result. A cycle can remain retained while support
+verification is unavailable. Persist the concise conclusion, uncertainty,
+evidence references, and resulting IDs, not raw private monologue. Failed
+procedure qualification leaves retained observations and questions intact.
+
+### Bind A Domain Observation
+
+`cognition.register_investigation_observer(domain, observer)` registers a
+host-owned collector receiving the explicit service and investigation. Collect
+fresh evidence against the original trigger, preserving source IDs, revision,
+cutoff, and quality. Return unavailable evidence explicitly; do not substitute
+a generated answer or relax a trading/action gate to manufacture experience.
+
+Trigger contracts are validated by `validate_investigation_trigger()`:
+
+| Type | Required observation request |
+|---|---|
+| `deadline` | Timezone-aware `at` |
+| `closed_candles` | `asset`, `venue`, `timeframe`, timezone-aware `after`, integer `count` |
+| `crossing` | `asset`, `venue`, `timeframe`, `metric`, finite `baseline`/`threshold`, `direction` above or below |
+| `source_update` | `source_id`, original `revision`, optional `thread_id` |
+
+A chart image, computed indicators, and candle cutoff must describe one frozen
+source set. A vision receipt must establish actual image inclusion; otherwise
+label the request numeric-only. Preserve investigation-linked chart evidence
+past display cleanup. Source edits create revisions and retain the original
+claim. Claims about author reliability need observed claims and sample size.
+
+### Isolated Lifecycle Example
+
+This example verifies durable retention and later context linkage using an
+explicit temporary target. It does not run background inference, contact a
+provider, or claim that the example interpretation is correct.
+
+```python
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from personas.learning.models import LearningTarget
+from personas.learning.service import LearningService
+
+with TemporaryDirectory(dir=".") as directory, patch.dict("os.environ", {
+    "PERSONA_LEARNING_ENABLED": "true", "HOMIE_KILLSWITCH_HARNESS_LEARNING": "enabled",
+}):
+    root = Path(directory).resolve()
+    service = LearningService(LearningTarget(
+        "example", root / "memory", root / "data", root / "state", root / "skills",
+    ))
+    experience = service.capture_experience("chart-1", "example", "Review breakout follow-through")
+    observed = service.record_observation(experience["id"], {
+        "evidence": "The closed candle returned below the previously observed level.",
+        "quality": "direct", "status": "resolved",
+    }, source_key="candle-revision-1")
+    cycle = service.enqueue_cognitive_cycle("interpret", "chart-1:closed", [observed["id"]],
+                                            experience_id=experience["id"])
+    idea = service.record_understanding({
+        "understanding_type": "interpretation", "title": "Breakout follow-through",
+        "content": "This breakout did not hold on the next observed close.",
+        "scope": "breakout follow-through", "uncertainty": "One example, not a general rule",
+        "evidence_ids": [observed["id"]], "cycle_id": cycle["id"],
+    }, source_key="example-interpretation")
+    inquiry = service.open_investigation({
+        "question": "Does the following close reclaim the breakout level?",
+        "why": "Distinguish temporary rejection from a sustained reversal.",
+        "domain": "example", "evidence_ids": [observed["id"]], "cycle_id": cycle["id"],
+        "trigger": {"type": "deadline", "at": "2030-01-01T01:00:00Z"},
+    }, source_key="example-follow-up")
+    reopened = LearningService(service.target)
+    assert reopened.get_record(inquiry["id"])["status"] == "open"
+    context = reopened.render_cognitive_context("Review breakout follow-through", max_chars=4000)
+    assert any(version["record_id"] == idea["id"] for version in context.versions)
+    assert not reopened.store.all("activation")
+```
+
+Production code supplies actual source evidence and lets the cognitive worker
+invoke reasoning and retain its validated result. The explicit interpretation
+above isolates the persistence boundary for a runnable example.
+
+## Hooks, Dispatch, And Reporting
+
+`runtime/function_hooks.py` is the provider-neutral function-hook owner. Its
+`FunctionHookEvent`, `register_hook`, `emit`, and `emit_cognitive_event` interfaces
+carry common events: `work.start`, `evidence.received`, `work.completed`,
+`work.failed`, `session.closed`, and `investigation.due`. Handlers enqueue actual
+persona reasoning through the cognitive worker; they do not replace thinking
+with scripted conclusions. Claude, Codex, Kimi, and other runtime adapters use
+the same state and lifecycle.
+
+`runtime/claude_function_hooks.py` is only the Claude transport adapter. Claude
+Mods events enter the common framework hooks through that adapter; Claude is
+not required for cognition or background reasoning. Feature-probe the binary that
+will actually execute a request before selecting Claude Mods or SDK/engine
+callbacks. The global CLI and the SDK-bundled CLI can support different APIs.
+Bind persona/activity identity in the host, forward only supported events, and
+expose the selected adapter and observed coverage. Function hooks enqueue work
+or supply context; long model reasoning stays in the shared worker.
+
+Generic HTTP model-only adapters disable tools explicitly and support image
+inclusion receipts. `SECOND_BRAIN_GENERIC_MAX_OUTPUT_TOKENS` is an optional
+positive installation ceiling. With no ceiling, output defaults to 4096 tokens;
+a host `max_output_tokens` request can change that default but cannot exceed an
+explicit installation ceiling. These adapters do not invent pricing to enforce
+USD budgets: a non-null dollar budget requires a budget-aware configured runtime,
+and an unsupported request remains a visible routing refusal or fallback.
+
+The supervised 60-second dispatcher is an installation-wide leader with
+foreground priority and fair persona selection. Existing scheduled jobs are
+recovery wakes for the same durable queue. Typed pause, contention, lease,
+timeout, and provider failures defer work without converting them into failed
+learning. The worker checkpoint remains the restart boundary.
+
+`reporting.build_learning_report(service, *, since, until)` returns host-computed
+counts and inspectable records without writes or model calls. It distinguishes
+understanding revisions from distinct conclusion content, procedure qualification
+summaries from raw trial/manifests, and executed cognitive-context inclusion.
+Periods use aware timestamps, inclusive start/exclusive end, at most 366 days.
+Current status projections accompany the dated records; they are not a historical
+database snapshot. The operator projection redacts secrets and local paths.
+
+Tool-capable persona turns expose the read-only, host-scoped `learning_report`
+tool alongside `record_expectation`. A caller cannot choose another persona;
+the canonical dispatcher supplies identity. Tool execution returns valid bounded
+JSON with complete host counts and explicitly truncated record summaries. It
+never invokes another model, sends a notification, or creates a learning record.
+
+`reporting.requested_report(task)` recognizes direct short questions such as
+“What did you learn this week?” and returns the requested date bounds. Calendar
+phrases use the deployment timezone; unqualified questions use the last seven
+days. Quoted examples, implementation requests, source JSON, and meta-discussion
+do not match. Central hooks may inject `report_context(report)` for such a
+request without granting tools to a model-only runtime. Counts are always the
+host's full-period totals, not the number of source excerpts shown to the model.
+
+`GET /api/agents/{persona_id}/learning/report` inspects that report. An explicit
+`POST` at the same path invokes `explain_learning_report()` and persists a bounded
+model receipt in the existing store settings. Both accept `since` and `until`
+query parameters. Hono only forwards allowed parameters and uses the existing
+main/default mapper. CLI `report --explain` reaches the same Python boundary.
+
+`await reporting.dispatch_learning_reports(services, *, now=None)` queues one
+combined daily explanation after 18:00 and important persisted changes through
+the existing default-profile proactive-action queue. The dispatcher supplies
+enabled services including default; it does not switch ambient persona variables.
+At most one bounded report model call runs in a tick. Queue and report receipts
+deduplicate after delivery and restart. Actual delivery remains the heartbeat's
+existing policy-controlled drain; a queued report is not a sent notification.
+
+## Deployment Identity And Evaluator Compatibility
+
+`HOMIE_DEFAULT_PROFILE_ROOT` identifies the deployed default installation; an
+absent override preserves legacy resolution. Bot, worker, scheduled, CLI, and API
+processes must agree on that root. `HOMIE_HOME` identifies the active persona;
+`ORCHESTRATION_DB_PATH` separately selects existing orchestration storage.
+Before first path resolution, boot and config read only the default-root, vault,
+orchestration, and shared-activity pins from the executing checkout's local
+`.claude/scripts/.env`; explicit process values win, and reload preserves the
+bound pins. Use literal paths (an absolute default installation root), not dotenv
+interpolation. Named learner children retain an explicit profile `.env`
+orchestration pin instead of inheriting the main bot's domain database; default
+root and activity storage remain shared.
+
+Inventory and back up split stores before reconciliation, preserve disjoint or
+identical records, and refuse conflicting IDs. A new checkout must not silently
+create a second learning history for the same main Homie.
+
+Evaluator version 3 freezes criterion IDs, definitions, applicability, and
+hard/advisory classification before trials. Free-form criticism is advisory;
+only substantiated violations of applicable predeclared hard criteria can veto
+adoption. Preserve old evaluations and requalify affected candidates with fresh
+held-out cases. Source-supported understanding and procedure qualification remain
+separate counts and contracts.
 
 ## Connect a runtime surface
 
@@ -293,3 +501,41 @@ provider/model attribution, missing and corrected evidence, and prompt truncatio
 that drops a selected method. Run the examples above as interface smoke tests;
 use the existing harness core, runtime reliability, domain, evaluation, and queue
 worker suites for lifecycle regressions. Live provider checks are separate evidence.
+
+
+### Pinned Codex reasoning and caller-tool transport
+
+`SECOND_BRAIN_CODEX_APP_SERVER_COMMAND` may name an absolute installed executable
+for the isolated Codex app-server bridge. It applies to strict `model_only`
+requests and requests carrying Homie tool definitions. Ordinary `codex exec`
+and the developer CLI retain their
+configured command. The app-server still checks the proven protocol version and
+all least-authority constraints. A missing configured executable fails visibly.
+The pin survives persona capability scoping; it grants no credentials or tools.
+
+A newer CLI version is not automatically compatible with this transport. Validate
+that exact binary with the harmless dynamic-tool and ambient-authority gate
+before admitting it. Keep any proven older bridge package installed separately
+from the user's current global CLI, and retain its version/hash receipt.
+
+The verified text-only `model_only` path advertises `dynamicTools=[]` and rejects
+all server tool requests, dynamic calls, and ambient native events. It can run
+numeric-evidence cognition and source-support evaluation without Claude. Image
+transport on this path remains unsupported and follows the configured fallback
+policy. An image receipt is never inferred from a filename in a prompt.
+
+Codex does not expose an enforceable provider output-token or USD budget through
+this transport. Requests with either explicit ceiling fail before inference.
+Otherwise the host bounds elapsed time and aggregate output bytes (default
+262144; `metadata.max_output_bytes` accepts 1024–1048576). Receipts label the
+limit `host_generated_content_bytes`; it is not a provider token or billing cap.
+
+
+Codex model-only receipts report `generated_content_bytes` separately from
+`total_wire_bytes`. User-message echoes and protocol metadata do not consume the
+requested `max_output_bytes` generation ceiling. Generated deltas and completed
+text snapshots both count conservatively. An independent total-wire guard bounds
+input echoes and metadata loops: 1,000,000 bytes plus four times serialized host
+input bytes plus sixteen times the generated-content ceiling. Individual input
+and output frames remain limited to 1,000,000 bytes. These host processing bounds
+are not provider token or billing limits.

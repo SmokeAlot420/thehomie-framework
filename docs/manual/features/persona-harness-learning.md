@@ -1,14 +1,25 @@
 # Autonomous Persona Harness Learning
 
-Status: Released in v1.8.0; qualified methods remain provisional
+Status: Harness introduced in v1.8.0; continuous cognition introduced in v1.9.0
 Owner: Framework (personas, cognition, runtime, scheduler, and dashboard)
-Last updated: 2026-09-06
+Last updated: 2026-09-10
 
 Each persona can develop its knowledge, understanding of its capabilities, and
 working methods through experience and study. The harness records expectations,
 checks observable outcomes, evaluates proposed improvements on separate cases,
 and adopts or revises methods automatically. Learning belongs to the persona and
 persists across model changes. Fine-tuning is not required.
+
+Continuous cognition makes understanding and unfinished investigations durable,
+even when no trade, external action, or new procedure occurs. The host invokes
+real model reasoning at meaningful lifecycle boundaries; code schedules and
+records the reasoning rather than deciding what the persona must conclude.
+
+The function hooks belong to the Homie framework. Switching the same persona
+between Codex, Kimi, Claude, or another configured runtime keeps its understanding,
+questions, and learning history. Claude Mods are an optional event adapter. When
+a provider is unavailable, pending reasoning remains visible and resumes through
+the configured runtime policy; a model switch does not create a new learner.
 
 This chapter covers daily operation. Use the
 [developer guide](persona-harness-learning-developer.md) to connect another
@@ -17,7 +28,8 @@ for the wider memory, reflection, and dream system.
 
 ## Start With The Running Installation
 
-v1.8.0 is [published](https://github.com/TheSmokeDev/taskchad-os/releases/tag/v1.8.0).
+Continuous cognition ships in
+[v1.9.0](https://github.com/TheSmokeDev/taskchad-os/releases/tag/v1.9.0).
 Publishing a release does not upgrade or restart an existing installation.
 Check the CLI you are using and the running service separately through
 [Runtime Status And Model Control](runtime-status-model-control.md).
@@ -48,6 +60,84 @@ shown as an error, not interpreted as an empty history.
    troubleshooting table below instead of repeatedly starting new work.
 5. Pause the harness when you need to inspect it without further harness work.
    Roll back a particular activation when its applied method should be retired.
+
+## Understanding And Investigations
+
+The cycle is **reorient → interpret → investigate → revisit → reflect and retain
+→ carry forward**. Work starts with relevant identity, current understanding,
+recent observations, open questions, and qualified methods. Meaningful tool or
+source batches and work completion wake interpretation and debrief work. A
+durable investigation returns when its time or evidence condition is due. A
+restart preserves the question and pending work.
+
+Use the Learning history filters **Understanding**, **Investigations**, and
+**Cognitive cycles**. A concept, interpretation, belief, self-assessment, or source
+assessment can be retained as **tentative** immediately. Supported knowledge has
+an evidence check; a standing procedure still requires qualification. A failed
+procedure test does not erase an observation or an unresolved investigation.
+
+Investigations show their question, why it matters, original evidence, requested
+next observation, due condition, current status, and conclusion. Available
+triggers cover a deadline, closed candles, a price/indicator crossing, and new
+source/thread material. **Blocked** means the required evidence or capability
+is missing; it does not mean the hypothesis was disproved. Pause preserves this
+history and pending work. Resume makes overdue work eligible once.
+
+The dispatcher checks every 60 seconds, gives foreground work priority, and
+rotates across eligible personas. A check is not necessarily a model call. It
+uses tokens when evidence, unfinished work, or a due investigation warrants
+reasoning. Existing heartbeat/reflection/dream jobs also wake the same queue.
+Inspect **Cognitive lifecycle** for the last successful check, failures, and hook
+coverage. An enabled flag alone does not establish that a cycle completed.
+
+For a market persona, a no-call or risk block can still produce understanding.
+Chart interpretation must use the frozen candles and matching indicator/image
+evidence supplied to that request. A numeric-only receipt is not proof the model
+saw an image. A Discord claim retains its source identity and revisions so later
+edits do not silently replace what was originally observed. These are evidence
+connections, not a guarantee of market prediction accuracy.
+
+## Ask What Changed
+
+You can also ask directly, “What did you learn this week?” A capable runtime
+can read its own `learning_report` tool; the shared hook supplies the same host
+report to a matching direct question when tools are unavailable. “This week”
+means the current deployment-local calendar week. Asking how to implement a
+learning report, or quoting that question as an example, does not trigger it.
+
+The **What changed** report selects 24 hours, seven days, or 30 days. Counts come
+from stored records, not the model's estimate. **Distinct conclusions** separates
+repeated statements from understanding revisions; investigation, observation,
+qualification, adoption, and later-context counts remain separate. Raw
+evaluation trials and manifests do not count as learned ideas.
+
+**Explain these changes** explicitly invokes a model to explain the report with
+record references and uncertainty. Reading or refreshing a report does not invoke
+inference. Reports with no recorded changes do not manufacture learning.
+
+```sh
+thehomie profile learning report default --json
+thehomie profile learning report crypto --since 2026-09-01T00:00:00Z --until 2026-09-08T00:00:00Z --explain --json
+thehomie profile learning list default --kind understanding --json
+thehomie profile learning list crypto --kind investigation --status blocked --json
+thehomie profile learning list crypto --kind cognitive_cycle --json
+```
+
+Report periods are inclusive at `--since`, exclusive at `--until`, require
+timezone-aware timestamps, and may span up to 366 days. With no dates the period
+is the preceding seven days. Dates above are examples, not a prescribed window.
+
+The combined daily recap becomes due at 18:00 in the deployment timezone and
+queues at the first eligible wake respecting existing quiet hours. If quiet
+hours or downtime defer it, the next eligible morning can deliver it. Important
+changed conclusions and requests for input use the existing proactive-action
+queue. Dedupe survives delivery and restart; queueing is not a delivery receipt.
+The existing notification channel policy still controls actual delivery.
+
+To verify actual continuity, follow a cycle into retained understanding or an
+investigation, then its reassessment, then a later **executed** context receipt
+linking the exact retained version. An informed no-change conclusion is valid.
+More candidates or more reasoning calls alone are not proof of improvement.
 
 The dashboard refreshes automatically and also has a **Refresh** button. CLI
 inspection reaches the same Python-owned state:
@@ -132,7 +222,9 @@ that reflection tick. Do not apply that old default to the v1.8 harness.
 |---|---|
 | Empty history | Confirm the persona, effective enable/pause state, running version, and whether work passed through a supported surface |
 | Waiting for an outcome | Inspect the deadline and source evidence; absent access or an unfinished observation window cannot establish failure |
-| No background progress | Inspect queue status, pause/disable state, foreground activity, and existing heartbeat/reflection/dream execution |
+| No background progress | Inspect dispatcher health and last successful check, queue status, pause/disable state, foreground activity, and recovery wake execution |
+| Main Homie has a different history in the bot and CLI | Compare `HOMIE_DEFAULT_PROFILE_ROOT` in the actual process launchers; inventory and reconcile split stores before changing the root, never silently choose one history |
+| Investigation blocked | Inspect the requested evidence source and next-check reason; source access, missing candles, or stale data must not become a false conclusion |
 | Quota, auth, or transport error | Read the visible error and repair the existing provider configuration as appropriate; infrastructure failures retain checkpoints and defer rather than consuming semantic-failure retries |
 | Observer unavailable | Restore access to the exact evidence source; retain the pending or partial observation instead of inventing an outcome |
 | Qualification failed | Inspect applicable cases, counterexamples, baseline, and hard checks; the candidate is not entitled to adoption |
@@ -229,6 +321,8 @@ persona-scoped and accept opaque IDs, not arbitrary evidence file paths.
 | GET | `/api/agents/{id}/learning` | Summary and active methods |
 | GET | `/api/agents/{id}/learning/records` | History with `kind`, `status`, `limit`, `cursor` |
 | GET | `/api/agents/{id}/learning/records/{record_id}` | Record, history, and linked evidence |
+| GET | `/api/agents/{id}/learning/report?since=...&until=...` | Read-only host counts and recorded changes |
+| POST | `/api/agents/{id}/learning/report?since=...&until=...` | Explicit bounded model explanation with a persisted receipt |
 | POST | `/api/agents/{id}/learning/pause` | Suspend harness learning |
 | POST | `/api/agents/{id}/learning/resume` | Clear pause |
 | POST | `/api/agents/{id}/learning/activations/{activation_id}/rollback` | Revert that activation's future influence |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import shutil
@@ -17,7 +18,7 @@ from .base import (
     RuntimeToolCall,
 )
 from .capabilities import TEXT_REASONING, TOOL_REASONING
-from .errors import RuntimeConfigError, RuntimeRetryableError, RuntimeUnsupportedCapabilityError
+from .errors import RuntimeConfigError, RuntimeExecutionError, RuntimeRetryableError, RuntimeUnsupportedCapabilityError
 from .profiles import RuntimeProfile
 
 _logger = logging.getLogger(__name__)
@@ -210,6 +211,16 @@ class ClaudeSdkRuntime:
             query,
         )
 
+        if request.model_only:
+            _base.assert_model_only_contract(request)
+        from . import image_input
+        from . import claude_function_hooks as function_hooks
+        blocks, image_receipts = image_input.image_blocks(request)
+        try:
+            bridge_options, bridge_receipt = await asyncio.to_thread(function_hooks.prepare, request)
+        except Exception as exc:
+            bridge_options, bridge_receipt = {}, {
+                "adapter": "engine_sdk", "reason": "bridge_unavailable:" + type(exc).__name__}
         allowed_tools = ["Read"] if request.read_only_tools else request.allowed_tools
         if request.workspace_write_tools:
             allowed_tools = ["Read", "Write", "Edit", "Glob", "Grep"]
@@ -249,7 +260,8 @@ class ClaudeSdkRuntime:
         # Redirect SDK to system CLI instead of bundled CLI.
         # On Windows, cli.js can't be executed directly — must use monkey-patch
         # which prepends `node` to the command. cli_path only works for native binaries.
-        _ensure_system_cli_patch()
+        if not bridge_options.get("cli_path"):
+            _ensure_system_cli_patch()
 
         if request.model or self.profile.model:
             options_kwargs["model"] = request.model or self.profile.model
@@ -317,7 +329,19 @@ class ClaudeSdkRuntime:
                 claude_tool_bridge.TOOL_SERVER_NAME: caller_tool_server
             }
 
+        if bridge_options:
+            bridge_env = bridge_options.pop("env", {})
+            options_kwargs.update(bridge_options)
+            options_kwargs["env"] = {**options_kwargs.get("env", {}), **bridge_env}
+        if request.model_only:
+            # No settings/plugin/MCP transport may reintroduce model tools.
+            options_kwargs["tools"] = []
+            options_kwargs["setting_sources"] = []
+            options_kwargs["plugins"] = []
+            options_kwargs["extra_args"] = {"strict-mcp-config": None}
         response_text = ""
+        actual_model = request.model or self.profile.model
+        completed = False
         session_id: str | None = None
         cost_usd: float | None = None
         subtype: str | None = None
@@ -327,9 +351,13 @@ class ClaudeSdkRuntime:
 
         try:
             async for message in query(
-                prompt=request.prompt,
+                prompt=image_input.image_prompt(request.prompt, blocks) if blocks else request.prompt,
                 options=ClaudeAgentOptions(**options_kwargs),
             ):
+                if getattr(message, "subtype", None) == "init":
+                    data = getattr(message, "data", {})
+                    if isinstance(data, dict) and data.get("model"):
+                        actual_model = data["model"]
                 if isinstance(message, AssistantMessage):
                     turn_text = ""
                     for block in message.content:
@@ -366,6 +394,9 @@ class ClaudeSdkRuntime:
                     session_id = message.session_id
                     cost_usd = message.total_cost_usd
                     subtype = message.subtype
+                    if getattr(message, "is_error", False):
+                        raise RuntimeExecutionError(str(message.result or "native model execution failed"))
+                    completed = True
                     if message.result:
                         response_text = message.result
         except Exception as exc:
@@ -378,12 +409,16 @@ class ClaudeSdkRuntime:
             if "auth" in text or "credential" in text or "login" in text:
                 raise RuntimeConfigError(str(exc)) from exc
             raise
+        finally:
+            bridge_receipt = await asyncio.to_thread(function_hooks.finish, bridge_receipt)
 
+        if not completed:
+            raise RuntimeRetryableError("Native stream ended without a terminal model result")
         return RuntimeResult(
             text=response_text.strip(),
             runtime_lane=RUNTIME_LANE_CLAUDE_NATIVE,
             provider=self.profile.provider,
-            model=request.model or self.profile.model,
+            model=actual_model,
             profile_key=self.profile.key,
             session_id=session_id,
             cost_usd=cost_usd,
@@ -391,4 +426,6 @@ class ClaudeSdkRuntime:
             tool_call_count=tool_call_count,
             tool_names_used=tool_names_used,
             tool_calls=tool_calls,
+            metadata={"image_inputs": [{**r, "delivered": completed} for r in image_receipts],
+                      "cognitive_hook_adapter": bridge_receipt},
         )

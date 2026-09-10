@@ -26,7 +26,7 @@ class SocialPostService:
         if db_path is None:
             import config
 
-            db_path = config.ORCHESTRATION_DB_PATH
+            db_path = config.get_orchestration_db_path()
         self._db = SocialPostDB(db_path)
 
     def create_draft(

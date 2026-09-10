@@ -628,3 +628,15 @@ def isolated_db_modules():
             )
 
         yield _factory
+
+
+@pytest.fixture(autouse=True)
+def _isolate_new_cognitive_chart_transport(monkeypatch):
+    """Ordinary unit tests never fetch live chart evidence implicitly."""
+    try:
+        from crypto_round import charting
+    except ImportError:
+        return
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("unit test requires fake market transport")
+    monkeypatch.setattr(charting, "_fetch_closed_candles", unavailable)

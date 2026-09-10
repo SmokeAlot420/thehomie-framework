@@ -107,3 +107,65 @@ def compile_context(
             }
         )
     return LearningContext(text, tuple(versions), content_hash(text))
+
+
+def compile_cognitive_context(
+    task: str,
+    understanding: Iterable[dict],
+    investigations: Iterable[dict],
+    methods: LearningContext,
+    *,
+    max_chars: int = 4000,
+) -> LearningContext:
+    """Compile exact, typed retained versions without changing procedure trials."""
+    from cognition import injection
+
+    if type(max_chars) is not int or not 0 <= max_chars <= 65536:
+        raise LearningError("invalid cognitive context budget")
+    words = set(re.findall(r"[\w-]{3,}", task.casefold()))
+    rows = []
+    for record in (*understanding, *investigations):
+        summary = " ".join(
+            str(record.get(k, "")) for k in ("title", "scope", "domain", "question", "content")
+        )
+        score = len(words & set(re.findall(r"[\w-]{3,}", summary.casefold())))
+        always = record.get("scope", "").casefold() in {"always", "all tasks", "all turns"}
+        if score or always or record["kind"] == "investigation":
+            rows.append((score, record.get("created_at", ""), record["id"], record))
+    rows.sort(key=lambda row: row[:3], reverse=True)
+    text = methods.text if len(methods.text) <= max_chars else ""
+    versions = list(methods.versions) if text else []
+    for _, _, _, record in rows:
+        if record["kind"] == "understanding":
+            body = (
+                f"{record['title']}\nScope: {record['scope']}\n{record['content']}\n"
+                f"Uncertainty: {record['uncertainty']}"
+            )
+        else:
+            body = (
+                f"Question: {record['question']}\nWhy: {record['why']}\n"
+                f"Next observation: {record['trigger']}"
+            )
+        block = (
+            f"\nRetained {record['kind']} {record['id']} ({record['status']}).\n{body}\n"
+            "This is contextual understanding or an open question, "
+            "not permission or a standing execution rule.\n"
+        )
+        sanitized = injection.sanitize_recalled_content(block)
+        if not sanitized:
+            continue
+        block = "\n" + injection.wrap_recalled_memory([sanitized]) + "\n"
+        if len(text) + len(block) > max_chars:
+            continue
+        text += block
+        versions.append(
+            {
+                "record_kind": record["kind"],
+                "record_id": record["id"],
+                "content_hash": record["content_hash"],
+                "content": body,
+                "rendered_block": block,
+                "status": record["status"],
+            }
+        )
+    return LearningContext(text, tuple(versions), content_hash(text))

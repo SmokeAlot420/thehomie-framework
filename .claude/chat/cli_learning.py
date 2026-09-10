@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 
 import click
+
 from personas.learning import operator
 
 
@@ -27,6 +29,32 @@ def _output(action: Callable[[], dict], json_mode: bool) -> None:
 def learning_summary(name: str, json_mode: bool) -> None:
     """Show current methods, pending outcomes, and learning status."""
     _output(lambda: operator.get_learning_operator(name).summary(), json_mode)
+
+
+@click.command("report")
+@click.argument("name", default="default")
+@click.option(
+    "--since", default=None, help="Inclusive ISO timestamp with timezone; default seven days ago."
+)
+@click.option("--until", default=None, help="Exclusive ISO timestamp with timezone; default now.")
+@click.option(
+    "--explain",
+    is_flag=True,
+    help="Invoke a model to explain persisted changes and save its receipt.",
+)
+@click.option("--json", "json_mode", is_flag=True)
+def learning_report(
+    name: str, since: str | None, until: str | None, explain: bool, json_mode: bool
+) -> None:
+    """Report understanding changes, investigations, and qualified methods."""
+
+    def action():
+        presenter = operator.get_learning_operator(name)
+        if explain:
+            return asyncio.run(presenter.explain_report(since=since, until=until))
+        return presenter.report(since=since, until=until)
+
+    _output(action, json_mode)
 
 
 @click.command("history")
@@ -62,9 +90,7 @@ def learning_history(
 @click.option("--json", "json_mode", is_flag=True)
 def learning_show(name: str, record_id: str, json_mode: bool) -> None:
     """Inspect a learning record and its linked evidence ids."""
-    _output(
-        lambda: operator.get_learning_operator(name).get_record(record_id), json_mode
-    )
+    _output(lambda: operator.get_learning_operator(name).get_record(record_id), json_mode)
 
 
 @click.command("pause")
@@ -89,14 +115,13 @@ def learning_resume(name: str, json_mode: bool) -> None:
 @click.option("--json", "json_mode", is_flag=True)
 def learning_rollback(name: str, activation_id: str, json_mode: bool) -> None:
     """Revert an activated method for future work, preserving all evidence."""
-    _output(
-        lambda: operator.get_learning_operator(name).rollback(activation_id), json_mode
-    )
+    _output(lambda: operator.get_learning_operator(name).rollback(activation_id), json_mode)
 
 
 def register_learning_commands(group: click.Group) -> None:
     for command in (
         learning_summary,
+        learning_report,
         learning_history,
         learning_show,
         learning_pause,
@@ -104,3 +129,4 @@ def register_learning_commands(group: click.Group) -> None:
         learning_rollback,
     ):
         group.add_command(command)
+    group.add_command(learning_history, name="list")

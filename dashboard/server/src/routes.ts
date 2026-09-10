@@ -87,6 +87,7 @@ export const ROUTE_MANIFEST: readonly string[] = [
   // agents.ts — dynamic per-persona
   '/api/agents/:id',
   '/api/agents/:id/learning',
+  '/api/agents/:id/learning/report',
   '/api/agents/:id/learning/records',
   '/api/agents/:id/learning/records/:recordId',
   '/api/agents/:id/learning/pause',

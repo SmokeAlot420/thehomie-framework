@@ -639,6 +639,7 @@ async def run_discord_persona_channel_turn(
         request, persona_id=persona_id, surface="discord_persona_channel",
         origin_id=learning_hooks.incoming_origin(incoming, session_key), task=incoming.text,
     )
+    await asyncio.to_thread(learning_turn.capture_sources, {"prefetched_context": incoming.prefetched_context, "live_look": look_context, "local_context": local_context})
     request = learning_turn.request
     try:
         tools_degraded = False

@@ -11,14 +11,18 @@ import hashlib
 import inspect
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from .context import CONTEXT_COMPILER_VERSION, compile_context, prospective_methods
+from runtime.errors import RuntimeLayerError
 
-EVALUATOR_VERSION = "persona-learning-paired-v2"
+from .context import CONTEXT_COMPILER_VERSION, compile_context, prospective_methods
+from .errors import LearningDeferredError, LearningOutputError, LearningUnavailableError
+
+EVALUATOR_VERSION = "persona-learning-paired-v3"
 DEFAULT_QUALIFICATION_SIZE = 12
 
 
@@ -45,6 +49,40 @@ def candidate_hash(candidate: Any) -> str:
 
 
 @dataclass(frozen=True)
+class QualificationCriterion:
+    """A frozen task requirement; graders cannot invent new vetoes afterward."""
+
+    id: str
+    definition: str
+    severity: str = "advisory"
+    applicability: str = "all"
+    check: str = "semantic"
+    json_path: str = ""
+    value: Any = None
+
+    def __post_init__(self):
+        if not self.id or not self.id.replace("_", "").replace("-", "").isalnum():
+            raise ValueError("criterion requires a stable identifier")
+        if not self.definition.strip() or self.severity not in {"hard", "advisory"}:
+            raise ValueError("criterion requires definition and hard/advisory classification")
+        if self.applicability not in {"all", "applicable", "counterexample"}:
+            raise ValueError("invalid criterion applicability")
+        if self.check not in {"semantic", "json_equals", "numeric_min", "numeric_max"}:
+            raise ValueError("invalid criterion check")
+        if self.check.startswith("numeric_") and (
+            type(self.value) not in {float, int} or not math.isfinite(self.value)
+        ):
+            raise ValueError("numeric criterion requires finite expected value")
+        if self.check != "semantic" and not self.json_path:
+            raise ValueError("structured criterion requires a JSON field path")
+
+    def applies(self, case) -> bool:
+        return self.applicability == "all" or self.applicability == (
+            "applicable" if case.applicable else "counterexample"
+        )
+
+
+@dataclass(frozen=True)
 class QualificationCase:
     id: str
     prompt: str
@@ -53,6 +91,8 @@ class QualificationCase:
     context: str = ""
     required_substrings: tuple[str, ...] = ()
     forbidden_substrings: tuple[str, ...] = ()
+    exact_text_requirement: str = ""
+    criteria: tuple[QualificationCriterion, ...] = ()
 
     def __post_init__(self):
         if not self.id.strip() or not self.prompt.strip() or not self.expected.strip():
@@ -61,6 +101,31 @@ class QualificationCase:
             raise ValueError("applicable must be a boolean")
         object.__setattr__(self, "required_substrings", tuple(self.required_substrings))
         object.__setattr__(self, "forbidden_substrings", tuple(self.forbidden_substrings))
+        object.__setattr__(
+            self,
+            "criteria",
+            tuple(
+                c if isinstance(c, QualificationCriterion) else QualificationCriterion(**c)
+                for c in self.criteria
+            ),
+        )
+        if len({c.id for c in self.criteria}) != len(self.criteria):
+            raise ValueError("qualification criterion identifiers must be distinct")
+        # Legacy substring rubrics are retained in old manifests but have no veto
+        # authority unless the actual task explicitly asks for those exact bytes.
+        if self.exact_text_requirement and (
+            self.exact_text_requirement not in self.prompt + "\n" + self.context
+            or not re.search(
+                r"\b(exact(?:ly)?|verbatim|literal|word|phrase|substring|token)\b",
+                self.exact_text_requirement,
+                re.IGNORECASE,
+            )
+            or any(
+                term not in self.exact_text_requirement
+                for term in self.required_substrings + self.forbidden_substrings
+            )
+        ):
+            raise ValueError("exact-text requirement must quote the actual task and literal terms")
 
     @property
     def fingerprint(self) -> str:
@@ -283,10 +348,10 @@ class EvaluationReceipt:
 
 def _strict_score(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("grader score must be numeric")
+        raise LearningOutputError("grader score must be numeric")
     score = float(value)
     if not math.isfinite(score) or not 0 <= score <= 1:
-        raise ValueError("grader score must be finite in [0, 1]")
+        raise LearningOutputError("grader score must be finite in [0, 1]")
     return score
 
 
@@ -340,7 +405,7 @@ async def runtime_reasoning(
         )
     )
     if result.tool_call_count or result.tool_calls or result.tool_names_used:
-        raise ValueError("model-only evaluator returned tool activity")
+        raise LearningOutputError("model-only evaluator returned tool activity")
     return CaseExecution(
         result.text,
         result.model,
@@ -355,9 +420,12 @@ def _parse_object(text: str) -> dict:
     value = text.strip()
     if value.startswith("```"):
         value = value.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    parsed = json.loads(value)
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError) as exc:
+        raise LearningOutputError("grader must return valid JSON") from exc
     if not isinstance(parsed, dict):
-        raise ValueError("grader must return a JSON object")
+        raise LearningOutputError("grader must return a JSON object")
     return parsed
 
 
@@ -421,7 +489,13 @@ async def runtime_judge(
         "evidence is unknown. For mode=support return JSON {supported: boolean, "
         "contradictions_addressed: boolean, changes_behavior: boolean, reason: string}. "
         "For mode=paired return JSON {score_a: number 0..1, score_b: number 0..1, "
-        "failures_a: string[], failures_b: string[], reason: string}. "
+        "violations_a: [{criterion_id:string,output_excerpt:string,evidence_excerpt:string,"
+        "explanation:string}], violations_b: [...], advisories_a:string[], advisories_b:string[], "
+        "reason:string}. Only report violations of the predeclared case.criteria that apply. "
+        "Quote exact output bytes and exact task/context/expected evidence "
+        "supporting each violation. "
+        "Minor cautions, style preferences and hypothetical concerns are advisory comments. "
+        "Never invent criteria or treat suggested wording as an exact-string requirement. "
         "Score both outputs by the SAME declared metric, without rewarding verbosity.\n"
         + json.dumps(payload, ensure_ascii=False, allow_nan=False)
     )
@@ -445,9 +519,13 @@ async def runtime_judge(
                 "attempts": attempts,
             }
             return parsed
-        except Exception as exc:
+        except LearningDeferredError as exc:
+            if not isinstance(exc, (LearningOutputError, LearningUnavailableError)):
+                raise
             attempts.append({"lane": lane, "profile": profile, "error": type(exc).__name__})
-    raise RuntimeError("learning_judge_unavailable:" + json.dumps(attempts))
+        except (RuntimeLayerError, TimeoutError, ConnectionError, OSError) as exc:
+            attempts.append({"lane": lane, "profile": profile, "error": type(exc).__name__})
+    raise LearningUnavailableError("learning_judge_unavailable:" + json.dumps(attempts))
 
 
 async def runtime_case(
@@ -474,10 +552,80 @@ async def runtime_case(
 
 
 def _hard_failures(case: QualificationCase, text: str) -> set[str]:
-    lower = text.casefold()
-    return {
-        f"missing:{term}" for term in case.required_substrings if term.casefold() not in lower
-    } | {f"forbidden:{term}" for term in case.forbidden_substrings if term.casefold() in lower}
+    failures = set()
+    if case.exact_text_requirement:
+        failures |= {f"missing:{term}" for term in case.required_substrings if term not in text}
+        failures |= {f"forbidden:{term}" for term in case.forbidden_substrings if term in text}
+    for criterion in case.criteria:
+        if (
+            criterion.severity != "hard"
+            or not criterion.applies(case)
+            or criterion.check == "semantic"
+        ):
+            continue
+        try:
+            value = json.loads(text)
+            for part in criterion.json_path.removeprefix("$.").split("."):
+                value = value[part]
+            passed = (
+                value == criterion.value
+                if criterion.check == "json_equals"
+                else type(value) in {float, int}
+                and math.isfinite(value)
+                and (
+                    value >= criterion.value
+                    if criterion.check == "numeric_min"
+                    else value <= criterion.value
+                )
+            )
+        except (ValueError, TypeError, KeyError, IndexError):
+            passed = False
+        if not passed:
+            failures.add(criterion.id)
+    return failures
+
+
+def _verdict_failures(case: QualificationCase, text: str, verdict: dict, label: str):
+    """Only predeclared hard semantic criteria with physical quotations can veto."""
+    hard = _hard_failures(case, text)
+    advisories = list(verdict.get(f"advisories_{label}", []))
+    legacy = verdict.get(f"failures_{label}", [])
+    violations = verdict.get(f"violations_{label}", [])
+    if (
+        not isinstance(advisories, list)
+        or not isinstance(legacy, list)
+        or any(not isinstance(s, str) for s in advisories + legacy)
+        or not isinstance(violations, list)
+    ):
+        raise LearningOutputError("invalid paired grader finding arrays")
+    advisories += legacy  # v2 free prose is retained, never promoted into v3 vetoes.
+    criteria = {c.id: c for c in case.criteria}
+    reference = "\n".join((case.prompt, case.context, case.expected))
+    for finding in violations:
+        if not isinstance(finding, dict):
+            raise LearningOutputError("criterion finding must be an object")
+        criterion = criteria.get(finding.get("criterion_id"))
+        excerpt = finding.get("output_excerpt")
+        evidence = finding.get("evidence_excerpt")
+        substantiated = (
+            criterion is not None
+            and criterion.severity == "hard"
+            and criterion.check == "semantic"
+            and criterion.applies(case)
+            and isinstance(excerpt, str)
+            and bool(excerpt.strip())
+            and excerpt in text
+            and isinstance(evidence, str)
+            and bool(evidence.strip())
+            and evidence in reference
+            and isinstance(finding.get("explanation"), str)
+            and bool(finding["explanation"].strip())
+        )
+        if substantiated:
+            hard.add(criterion.id)
+        else:
+            advisories.append({"unsubstantiated_or_advisory": finding})
+    return hard, advisories
 
 
 def _candidate_value(candidate: dict, *keys: str, default=None):
@@ -498,6 +646,7 @@ async def qualify_candidate(
     checkpoint: Callable | None = None,
     prior_comparisons: tuple[dict, ...] = (),
     prior_support: dict | None = None,
+    prior_trials: tuple[dict, ...] = (),
 ) -> EvaluationReceipt:
     """Evaluate evidence first and any behavioral change with paired held-out tasks.
 
@@ -566,7 +715,7 @@ async def qualify_candidate(
         )
         for key in ("supported", "contradictions_addressed", "changes_behavior"):
             if type(support.get(key)) is not bool:
-                raise ValueError("support verdict requires strict boolean fields")
+                raise LearningOutputError("support verdict requires strict boolean fields")
         if not support["supported"] or not support["contradictions_addressed"]:
             return EvaluationReceipt(
                 **base, passed=False, reason="evidence_unsupported", support=support
@@ -607,6 +756,7 @@ async def qualify_candidate(
         execute = run_case or runtime_case
         comparisons: list[dict] = []
         prior = {item["case_id"]: item for item in prior_comparisons}
+        trials = {(item["case_id"], item["variant"]): item["execution"] for item in prior_trials}
         actual_identity = None
         new_failures = False
         for index, case in enumerate(manifest.cases):
@@ -617,7 +767,7 @@ async def qualify_candidate(
                     completed["baseline"][key] for key in ("runtime_lane", "provider", "model")
                 )
                 if actual_identity is not None and identity != actual_identity:
-                    raise ValueError("paired_runtime_drift")
+                    raise LearningUnavailableError("paired_runtime_drift")
                 actual_identity = identity
                 new_failures = new_failures or bool(
                     set(completed["candidate_failures"]) - set(completed["baseline_failures"])
@@ -631,19 +781,38 @@ async def qualify_candidate(
                 variants.reverse()
             outputs = {}
             for name, procedure in variants:
-                result = await _call(execute, case, procedure, manifest, cwd=working_dir)
+                if checkpoint:
+                    await _call(
+                        checkpoint,
+                        {"boundary": "before_trial", "case_id": case.id, "variant": name},
+                    )
+                result = trials.get((case.id, name))
+                reused = result is not None
+                if result is None:
+                    result = await _call(execute, case, procedure, manifest, cwd=working_dir)
                 if isinstance(result, dict):
                     result = CaseExecution(**result)
                 identity = (result.runtime_lane, result.provider, result.model)
                 if not all(identity):
-                    raise ValueError("trial_missing_runtime_identity")
+                    raise LearningOutputError("trial_missing_runtime_identity")
                 if result.model != manifest.model:
-                    raise ValueError("trial_model_drift")
+                    raise LearningUnavailableError("trial_model_drift")
                 if actual_identity is None:
                     actual_identity = identity
                 if identity != actual_identity:
-                    raise ValueError("paired_runtime_drift")
+                    raise LearningUnavailableError("paired_runtime_drift")
                 outputs[name] = result
+                if checkpoint and not reused:
+                    await _call(
+                        checkpoint,
+                        {
+                            "trial": {
+                                "case_id": case.id,
+                                "variant": name,
+                                "execution": asdict(result),
+                            }
+                        },
+                    )
             labels = ["baseline", "candidate"] if index % 2 == 0 else ["candidate", "baseline"]
             verdict = await _call(
                 call_judge,
@@ -662,12 +831,11 @@ async def qualify_candidate(
                 labels[0]: _strict_score(verdict.get("score_a")),
                 labels[1]: _strict_score(verdict.get("score_b")),
             }
-            failures = {}
+            failures, advisories = {}, {}
             for label, name in zip(("a", "b"), labels):
-                raw = verdict.get(f"failures_{label}")
-                if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
-                    raise ValueError("grader hard failures must be string arrays")
-                failures[name] = set(raw) | _hard_failures(case, outputs[name].text)
+                failures[name], advisories[name] = _verdict_failures(
+                    case, outputs[name].text, verdict, label
+                )
             new_failures = new_failures or bool(failures["candidate"] - failures["baseline"])
             comparison = asdict(
                 CaseComparison(
@@ -681,6 +849,7 @@ async def qualify_candidate(
                     verdict,
                 )
             )
+            comparison["advisories"] = advisories
             comparison["context_bundle_hash"] = canonical_hash(bundles[case.id])
             comparison["baseline_context_hash"] = bundles[case.id]["baseline"]["context_hash"]
             comparison["candidate_context_hash"] = bundles[case.id]["candidate"]["context_hash"]
@@ -706,10 +875,9 @@ async def qualify_candidate(
             model=actual_identity[2],
             provider=actual_identity[1],
         )
+    except (LearningDeferredError, RuntimeLayerError, TimeoutError, ConnectionError, OSError):
+        raise
     except Exception as exc:
-        # Scheduler pause is a durable yield, not an evaluation failure.
-        if type(exc).__name__ == "LearningDeferred":
-            raise
         return EvaluationReceipt(
             **base,
             passed=False,
@@ -784,8 +952,10 @@ async def evaluate_candidate(
             if previous
             else freeze_context_bundles(service, candidate, manifest)
         )
-    key = run_key or canonical_hash(
+    key = canonical_hash(
         {
+            "requested_run_key": run_key,
+            "evaluator_version": EVALUATOR_VERSION,
             "candidate": candidate_hash(candidate),
             "manifest": manifest.hash if manifest else "knowledge",
             "evidence": revision,
@@ -794,7 +964,7 @@ async def evaluate_candidate(
     operation = "evaluation:" + key
     token = service.store.claim(candidate_id, operation, ttl_seconds=7200)
     if token is None:
-        raise LearningError("evaluation_in_progress")
+        raise LearningDeferredError("evaluation_in_progress")
     try:
         records = [
             r for r in service.store.all("evaluation") if r.get("candidate_id") == candidate_id
@@ -826,6 +996,7 @@ async def evaluate_candidate(
                 if fingerprints & set(previous.get("case_fingerprints", [])):
                     raise LearningError("qualification_case_previously_exposed")
         frozen = {
+            "evaluator_version": EVALUATOR_VERSION,
             "mode": "manifest",
             "passed": False,
             "evaluation_run_key": key,
@@ -851,8 +1022,26 @@ async def evaluate_candidate(
             None,
         )
 
+        prior_trials = tuple(
+            r["trial"]
+            for r in records
+            if r.get("evaluation_run_key") == key and r.get("mode") == "trial"
+        )
+
         async def persist(item):
-            if "support" in item:
+            if "boundary" in item:
+                if checkpoint:
+                    await _call(checkpoint, item)
+                return
+            if "trial" in item:
+                payload = {
+                    "mode": "trial",
+                    "passed": False,
+                    "trial": item["trial"],
+                    "evaluation_run_key": key,
+                }
+                suffix = "trial:" + item["trial"]["case_id"] + ":" + item["trial"]["variant"]
+            elif "support" in item:
                 payload = {
                     "mode": "support",
                     "passed": False,
@@ -868,6 +1057,7 @@ async def evaluate_candidate(
                     "evaluation_run_key": key,
                 }
                 suffix = "case:" + item["case_id"]
+            payload["evaluator_version"] = EVALUATOR_VERSION
             service.record_evaluation(candidate_id, payload, run_key=key + ":" + suffix)
             if checkpoint:
                 await _call(checkpoint, item)
@@ -882,6 +1072,7 @@ async def evaluate_candidate(
             checkpoint=persist,
             prior_comparisons=prior_cases,
             prior_support=prior_support,
+            prior_trials=prior_trials,
         )
         payload = asdict(receipt)
         payload.update(receipt_hash=receipt.hash, receipt=asdict(receipt), evaluation_run_key=key)
@@ -893,7 +1084,7 @@ async def evaluate_candidate(
             and item.get("status") in {"active_provisional", "active_supported"}
             for item in service.store.all("activation")
         )
-        if not active:
+        if not active and not receipt.errors:
             service.set_status(
                 candidate_id,
                 "qualified" if receipt.passed else "evaluation_failed",

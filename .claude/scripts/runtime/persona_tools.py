@@ -57,6 +57,7 @@ PERSONA_CHAT_BASE_TOOLS: tuple[str, ...] = (
     "skill_view",
     "request_tool",
     "record_expectation",
+    "learning_report",
 )
 
 
@@ -288,11 +289,12 @@ def build_persona_tool_payload(
         from runtime import tool_impl_learning
         if learning_capture:
             tool_impl_learning.register_tools()
-        learning_entry = tool_registry.get_entry("record_expectation")
-        if (learning_capture and learning_entry is not None and "record_expectation" not in granted_names
-                and (allowed_tool_names is None or "record_expectation" in allowed)):
-            tool_defs.append(copy.deepcopy(learning_entry.schema))
-            granted_names.add("record_expectation")
+        for learning_name in ("record_expectation", "learning_report"):
+            learning_entry = tool_registry.get_entry(learning_name)
+            if (learning_capture and learning_entry is not None and learning_name not in granted_names
+                    and (allowed_tool_names is None or learning_name in allowed)):
+                tool_defs.append(copy.deepcopy(learning_entry.schema))
+                granted_names.add(learning_name)
     except Exception:
         _logger.warning("learning tool unavailable", exc_info=True)
 

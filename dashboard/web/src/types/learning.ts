@@ -16,6 +16,13 @@ export interface LearningSummary {
   active_methods: LearningRecord[];
   pending_outcomes: number;
   failures: number;
+  cognition?: {
+    cycles: Record<string, number>;
+    understanding: Record<string, number>;
+    investigations: Record<string, number>;
+    delivered_contexts: number;
+    dispatcher: { state: string; last_success_at?: number | null; error_type?: string | null; adapter_coverage?: unknown };
+  };
   queue?: {
     pending: number;
     statuses: Record<string, number>;
@@ -27,4 +34,18 @@ export interface LearningPage {
   persona_id: string;
   records: LearningRecord[];
   next_cursor: string | null;
+}
+
+export interface LearningReport {
+  persona_id: string;
+  period: { since: string; until: string };
+  counts: Record<string, number>;
+  records: Array<{ id: string; kind: string; title?: string; question?: string; conclusion?: string; status?: string }>;
+  open_investigations: Array<{ id: string; question?: string; status?: string; reason?: string }>;
+  records_truncated: boolean;
+  has_activity: boolean;
+  narrative: string | null;
+  narrative_status: string;
+  model?: string;
+  provider?: string;
 }

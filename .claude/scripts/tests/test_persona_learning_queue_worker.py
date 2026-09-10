@@ -200,7 +200,9 @@ def test_real_worker_proposes_evaluates_promotes_without_reinforcing_practice(tm
     assert "diagnostic" in service.render_context("A prospect objects to price").text
     assert len(service.store.all("candidate")) == 1
     worker.discover_work(service)
-    assert queue.LearningQueue(service).list() == []
+    # New cognitive interpretation of real evidence is allowed; learner-generated
+    # practice must not schedule another procedure-learning job.
+    assert all(j["kind"] == "cognition" for j in queue.LearningQueue(service).list())
 
 
 def test_observation_stage_persists_and_deduplicates_collection_timestamp(tmp_path, monkeypatch):
@@ -345,10 +347,12 @@ def test_host_observed_paper_settlement_learns_but_generated_practice_does_not(t
         metadata={"practice_origin": "host_observed", "source_receipt_id": "call-1"})
     service.record_execution(paper["id"], {"success": True}, attempt_key="accepted")
     worker.discover_work(service)
-    assert queue.LearningQueue(service).list() == []
+    # New cognitive interpretation of real evidence is allowed; learner-generated
+    # practice must not schedule another procedure-learning job.
+    assert all(j["kind"] == "cognition" for j in queue.LearningQueue(service).list())
     service.record_observation(paper["id"], {"status": "resolved", "quality": "direct",
         "evidence": {"call_id": "call-1", "simulated": True, "settlement": "market_closed"}}, source_key="market")
-    jobs = queue.LearningQueue(service).list()
+    jobs = [j for j in queue.LearningQueue(service).list() if j["kind"] != "cognition"]
     assert len(jobs) == 1 and jobs[0]["payload"]["experience_id"] == paper["id"]
     assert any(r["kind"] == "observation" for r in worker._evidence(service, paper["id"]))
     assert all(r.get("mode", "practice") == "practice" for r in worker._evidence(service, paper["id"]))
@@ -526,7 +530,12 @@ def test_corrected_outcome_retires_method_and_preserves_revision_lineage(tmp_pat
     before = queue.LearningQueue(service).list(include_finished=True)
     worker.discover_work(service)
     after = queue.LearningQueue(service).list(include_finished=True)
-    assert {j["id"] for j in before} == {j["id"] for j in after}
+    assert {j["id"] for j in before if j["kind"] != "cognition"} == {
+        j["id"] for j in after if j["kind"] != "cognition"}
+    cognitive_count = len([j for j in after if j["kind"] == "cognition"])
+    worker.discover_work(service)
+    assert len([j for j in queue.LearningQueue(service).list(include_finished=True)
+                if j["kind"] == "cognition"]) == cognitive_count
 
 
 def test_profile_child_preserves_operator_learning_budgets(tmp_path, monkeypatch):

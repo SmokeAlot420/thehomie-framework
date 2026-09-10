@@ -1,4 +1,4 @@
-"""Registered persona-private expectation capture; no external capability."""
+"""Persona-private expectation capture and read-only learning reports."""
 
 from __future__ import annotations
 
@@ -33,6 +33,21 @@ def record_expectation(
     )
     record = record_actor_expectation(payload, persona_id=_persona_id)
     return json.dumps({"expectation_id": record["id"], "status": "committed_before_action"})
+
+
+def learning_report(
+    since: str | None = None,
+    until: str | None = None,
+    *,
+    _persona_id: str | None = None,
+) -> str:
+    """Read this caller's host-counted learning; never invokes a model or network."""
+    from personas.learning import operator, reporting
+
+    if not _persona_id:
+        raise ValueError("learning reports require a host-attributed persona")
+    report = operator.get_learning_operator(_persona_id).report(since=since, until=until)
+    return reporting.report_context(report)
 
 
 def register_tools() -> int:
@@ -71,4 +86,31 @@ def register_tools() -> int:
         },
         handler=record_expectation,
     )
-    return 1
+    tool_registry.register_tool(
+        "learning_report",
+        "Read your own recorded learning for a period. Counts are computed by the host, "
+        "not inferred from examples. Use this for what you learned, changed understanding, "
+        "open investigations, and actual method adoption. No model or external call occurs.",
+        toolset="cognitive_learning",
+        effect="read",
+        persona_scoped=True,
+        parameters={
+            "type": "object",
+            "properties": {
+                "since": {
+                    "type": "string",
+                    "description": (
+                        "Inclusive timezone-aware ISO timestamp; default seven days ago."
+                    ),
+                },
+                "until": {
+                    "type": "string",
+                    "description": "Exclusive timezone-aware ISO timestamp; default now.",
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        handler=learning_report,
+    )
+    return 2

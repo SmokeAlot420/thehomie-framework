@@ -1,6 +1,6 @@
 [project]
 name = "thehomie"
-version = "1.8.0"
+version = "1.9.0"
 description = "The Homie — personal AI agent framework"
 requires-python = ">=3.12"
 dependencies = [
@@ -96,7 +96,7 @@ dependencies = [
     # at import time.
     "ccxt>=4.5.0",
     "pandas>=2.2.0",
-    # Crypto zero-paid round - PMXT is isolated behind crypto_round.pmxt_read.
+    # Optional prediction-market data adapter; live execution remains separately gated.
     # Pin exactly: this adapter intentionally exposes public fetch methods only.
     "pmxt==2.18.0",
 ]
@@ -141,6 +141,8 @@ livekit = [
     "livekit-api>=1.0.0",
     "livekit-agents[openai,silero]>=1.5,<2",
 ]
+
+[project.entry-points."homie.learning_observers"]
 
 [tool.ruff]
 target-version = "py312"

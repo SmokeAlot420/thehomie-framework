@@ -32,6 +32,13 @@ _LINK_FIELDS = frozenset(
         "evidence_ids",
         "counterevidence_ids",
         "supersedes",
+        "predecessor_id",
+        "cycle_id",
+        "investigation_id",
+        "understanding_id",
+        "execution_id",
+        "result_ids",
+        "latest_evidence_ids",
     }
 )
 _KINDS = frozenset(
@@ -45,9 +52,14 @@ _KINDS = frozenset(
         "activation",
         "context",
         "failure",
+        "cognitive_cycle",
+        "understanding",
+        "investigation",
     }
 )
-_ATTENTION_STATUSES = frozenset({"failed", "deferred", "needs_reassessment", "unresolvable"})
+_ATTENTION_STATUSES = frozenset(
+    {"failed", "deferred", "blocked", "needs_reassessment", "unresolvable"}
+)
 
 
 def safe_text(value: str) -> str:
@@ -95,8 +107,13 @@ class LearningOperator:
         result["links"] = []
         if links:
             seen: set[str] = set()
-            for field in _LINK_FIELDS:
-                raw = row.get(field, [])
+            references = {field: row.get(field, []) for field in sorted(_LINK_FIELDS)}
+            references["included versions"] = [
+                version.get("record_id", version.get("activation_id", ""))
+                for version in row.get("included", [])
+                if isinstance(version, dict)
+            ]
+            for field, raw in references.items():
                 values = raw if isinstance(raw, list) else [raw]
                 for record_id in values[:60]:
                     if (
@@ -114,6 +131,8 @@ class LearningOperator:
         return result
 
     def summary(self) -> dict:
+        from personas.learning import reporting
+
         data = self.service.summary()
         return {
             "persona_id": self.service.target.persona_id,
@@ -131,7 +150,19 @@ class LearningOperator:
             ),
             "queue": _safe(data.get("queue", {"pending": 0, "statuses": {}, "jobs": []})),
             "recent_failures": [self._present(row) for row in data["failures"]],
+            "cognition": _safe(reporting.cognition_overview(self.service)),
         }
+
+    def report(self, *, since: str | None = None, until: str | None = None) -> dict:
+        from personas.learning import reporting
+
+        return _safe(reporting.build_learning_report(self.service, since=since, until=until))
+
+    async def explain_report(self, *, since: str | None = None, until: str | None = None) -> dict:
+        from personas.learning import reporting
+
+        report = self.report(since=since, until=until)
+        return _safe(await reporting.explain_learning_report(self.service, report))
 
     def list_records(
         self,
@@ -153,7 +184,10 @@ class LearningOperator:
             while len(items) < limit:
                 page = self.service.list_records(limit=limit - len(items), cursor=next_cursor)
                 items.extend(
-                    row for row in page["items"] if row.get("status") in _ATTENTION_STATUSES
+                    row
+                    for row in page["items"]
+                    if row.get("status") in _ATTENTION_STATUSES
+                    and (status is None or row.get("status") == status)
                 )
                 next_cursor = page["next_cursor"]
                 if next_cursor is None:

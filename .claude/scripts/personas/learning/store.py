@@ -37,9 +37,12 @@ RECORD_KINDS = frozenset(
         "evaluation",
         "activation",
         "context",
+        "cognitive_cycle",
+        "understanding",
+        "investigation",
     }
 )
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_PAYLOAD_BYTES = 1_048_576
 _SCHEMA = (
     "CREATE TABLE identity (id INTEGER PRIMARY KEY CHECK(id=1), persona_id TEXT NOT NULL)",
@@ -177,11 +180,23 @@ class LearningStore:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version != SCHEMA_VERSION:
+            if version not in {1, SCHEMA_VERSION}:
                 raise LearningError("unsupported learning database schema")
             owner = conn.execute("SELECT persona_id FROM identity WHERE id=1").fetchone()
             if owner is None or owner["persona_id"] != self.target.persona_id:
                 raise LearningError("learning database belongs to another profile")
+            if write and version == 1:
+                # Backup the committed v1 snapshot before the additive upgrade.
+                # BEGIN IMMEDIATE above serializes competing migration writers.
+                backup_path = self.directory / f"learning-v1-{uuid.uuid4().hex}.backup.db"
+                source = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
+                backup = sqlite3.connect(backup_path)
+                try:
+                    source.backup(backup)
+                finally:
+                    source.close()
+                    backup.close()
+                conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             yield conn
             if write:
                 conn.commit()
@@ -243,6 +258,11 @@ class LearningStore:
             elif event["event_type"] == "rollback":
                 result["status"] = "rolled_back"
                 result["rollback"] = data
+            elif event["event_type"] in {"cognitive_result", "investigation_transition"}:
+                result.update(data)
+                result["updated_at"] = event["created_at"]
+            elif event["event_type"] == "cognitive_trigger":
+                result.setdefault("trigger_provenance", []).append(data)
         return result
 
     def _many_rows(self, conn, rows) -> list[dict[str, Any]]:

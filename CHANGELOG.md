@@ -13,6 +13,44 @@ context. They are not public release tags unless a matching public tag exists.
 
 ---
 
+## TaskChad OS v1.9.0 — Continuous Persona Cognition
+
+**Release Date:** September 10, 2026
+
+Personas can retain developing understanding and pursue investigations through
+real model reasoning, independently of whether a trade or procedure is adopted.
+
+### Highlights
+
+- Model-independent framework function hooks connect work, evidence, completion,
+  failure, and due follow-ups to one persistent cognitive lifecycle.
+- Understanding and investigations carry evidence, uncertainty, revisions, and
+  follow-up conditions across sessions and model changes. Historical recall and
+  identity context remain persona-scoped and auditable.
+- A supervised minute-level dispatcher resumes due work, rotates personas fairly,
+  prioritizes fresh follow-ups over historical recovery, and yields to foreground
+  activity. Durable lifecycle outboxes recover debriefs after interruptions and
+  storage outages.
+- Vision-capable runtimes accept hash-verified chart images alongside numeric
+  evidence. Domain observer plugins can revisit candles or versioned source
+  material independently of action eligibility.
+- Evaluator v3 separates declared hard criteria from advisory criticism and keeps
+  infrastructure interruption distinct from failed learning.
+- The Learning view and CLI/API show understanding, investigations, exact host
+  counts, reports, and actual context use. Daily recaps use existing notification
+  policy and deduplication.
+- Default profile storage and orchestration storage have explicit independent
+  configuration, closing scheduler/runtime and named-profile path mismatches.
+
+Claude Mods are an optional, feature-probed adapter; the core runs without them.
+Configured Kimi/OpenAI-compatible providers support bounded no-tools reasoning.
+Providers that cannot enforce requested capabilities or explicit monetary caps
+report that limitation rather than silently weakening the contract. Existing
+external-action authority and paper-risk controls remain unchanged.
+
+See the [operator guide](docs/manual/features/persona-harness-learning.md) and
+[developer guide](docs/manual/features/persona-harness-learning-developer.md).
+
 ## TaskChad OS v1.8.0 — Persona Harness Learning
 
 **Release Date:** September 6, 2026
