@@ -16,8 +16,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Drain recorded persona learning work")
     parser.add_argument("--max-stages", type=int, default=1)
     parser.add_argument("--test", action="store_true")
+    parser.add_argument("--job-id", help="Run only this existing ready job in the selected persona")
     args = parser.parse_args()
-    result = asyncio.run(worker.wake_learning(test_mode=args.test, max_stages=args.max_stages))
+    options = {"job_id": args.job_id} if args.job_id is not None else {}
+    result = asyncio.run(
+        worker.wake_learning(test_mode=args.test, max_stages=args.max_stages, **options)
+    )
     print(json.dumps(result))
     return int(result.get("status") in {"failed", "retry", "lease_lost"})
 

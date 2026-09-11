@@ -4,14 +4,36 @@ Status: Shipped — born learning per profile (#422, 2026-08-13)
 Owner: Framework (memory pipelines + personas)
 Last updated: 2026-09-10
 
-This chapter documents the legacy scheduled reflection and belief pipeline.
-Since v1.9.0, [Persona Harness Learning](persona-harness-learning.md) also invokes
-continuous persona reasoning, retains versioned understanding, schedules
-investigations, and records later context use. Legacy reflection remains a
-complementary pipeline with separate eligibility rules. Its reflection-only
-provenance rules do not describe every learning record. See the
-[developer guide](persona-harness-learning-developer.md) for shared function hooks
-and evidence producers.
+The scheduled commands now serve as compatibility entry points into the shared
+persona cognitive lifecycle: `memory_reflect.py`, `memory_dream.py`, and their
+persona ticks request synthesis or wake the existing queue. They do not provide
+an independent automatic amendment path. Shared pause, configuration disables,
+foreground priority, and provider deferral control the work.
+
+Use [Persona Harness Learning](persona-harness-learning.md) for current operator
+behavior and the [developer guide](persona-harness-learning-developer.md) for
+admission, exact source manifests, and authority contracts. The sections below
+preserve the earlier reflection implementation as historical context; its
+separate eligibility, direct write flow, and success-watermark descriptions must
+not be used to infer unified completion. Deployment and provider proof are
+installation-specific and are not established by this manual.
+
+## Current Compatibility Contract
+
+- A scheduled invocation can return queued, coalesced, no-signal, interval,
+  disabled, or deferred. Admission is not completed inference or applied memory.
+- Successful retention records the source revision and exact excerpt consumed.
+  Omitted or partial input remains eligible across retries and later runs.
+- Physical session message IDs and source-family provenance prevent repeated
+  rolling windows from increasing independent evidence counts.
+- Generated reflections remain derived context. Explicit operator instructions
+  keep their existing protected authority; persona/external text cannot mint it.
+- The shared change authority binds automatic proposals to their cycle, sources,
+  and appropriate evaluation before using existing amendment or skill owners.
+- Inspect `thehomie profile learning lifecycle <persona> --json`, synthesis
+  request history, and the Learning tab for the actual stage and provider receipt.
+
+## Historical Reflection Implementation
 
 ## What It Does
 

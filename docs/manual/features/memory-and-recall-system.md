@@ -50,6 +50,29 @@ block), and [Memory, Knowledge Graph, And Dashboard Chat](memory-hive-chat-obser
 
 ## The Recall Pipeline
 
+### Persona Retrieval Policy
+
+The unified lifecycle can evaluate a persona-local retrieval policy through the
+existing learning queue. `thehomie evolve status --persona default --json`
+reports validated cases, development/held-out split, readiness, latest comparison,
+and active policy; `evolve tune` explicitly requests a batch and `evolve rollback`
+restores a predecessor. The Learning tab presents the same Python-owned records.
+
+Only vector/keyword weights and hybrid/keyword minimum scores are tunable.
+Explicit operator settings win. Persona identity, permissions, backend, embedding
+model, response model, context limits, and vault scope are fixed. Each concurrent
+recall resolves its own policy; policy activation must not rewrite global config.
+
+At least 60 genuinely validated relevance cases are split by source family.
+Existing unlabeled goldens remain diagnostic data. Development selects one of
+at most six deterministic neighbors; held-out relevance, paired confidence,
+protected/isolation checks, errors, and latency decide adoption. Positive engine
+scores alone cannot label relevance or justify adoption. Unready, no-change,
+deferred, accepted, and rollback states remain inspectable in the same journal.
+See [Persona Harness Learning](persona-harness-learning.md#unified-reflection-dreaming-and-recall-tuning)
+for thresholds and [the developer contract](persona-harness-learning-developer.md#unified-synthesis-and-tuning-interfaces)
+for APIs. This documents the implementation; confirm runtime deployment separately.
+
 A recall call executes up to six stages in order. The cheap, rules-only stages
 run first; the one model call (the re-rank) only fires for substantive queries.
 

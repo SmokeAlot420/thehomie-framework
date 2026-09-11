@@ -4099,6 +4099,11 @@ def evolve_propose(
     sys.exit(exit_code)
 
 
+from evolve.tuning_cli import register_tuning_commands  # noqa: E402
+
+register_tuning_commands(evolve)
+
+
 # ── Profile commands (PRD-7 Phase 2) ───────────────────────────────────────
 
 

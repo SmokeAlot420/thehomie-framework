@@ -16,11 +16,15 @@ export interface LearningSummary {
   active_methods: LearningRecord[];
   pending_outcomes: number;
   failures: number;
+  lifecycle?: LearningLifecycle;
+  tuning?: LearningTuning;
   cognition?: {
     cycles: Record<string, number>;
     understanding: Record<string, number>;
     investigations: Record<string, number>;
     delivered_contexts: number;
+    execution_modes?: Record<string, number>;
+    recorded_model_calls?: number;
     dispatcher: { state: string; last_success_at?: number | null; error_type?: string | null; adapter_coverage?: unknown };
   };
   queue?: {
@@ -28,6 +32,50 @@ export interface LearningSummary {
     statuses: Record<string, number>;
     jobs: Array<{ id: string; kind: string; stage: string; status: string; last_error?: string; record_id?: string | null }>;
   };
+}
+
+export interface LearningLifecycle {
+  persona_id: string;
+  pending_scope: string;
+  synthesis: Record<string, {
+    pending_cycles: number;
+    completed_cycles: number;
+    consumed_sources: number;
+    consumed_characters: number;
+    last_completed_at?: string | null;
+    latest_request?: { id?: string; status?: string; reason?: string } | null;
+    pending_consumers?: Array<{ cycle_id: string; status: string; input_count: number }>;
+  }>;
+  pending_stages: Array<{ id: string; kind: string; stage: string; status: string; record_id?: string | null; reason?: string | null; available_at?: number | null }>;
+  request_statuses: Record<string, number>;
+  pending_stages_truncated?: boolean;
+  cycles_truncated?: boolean;
+  recent_cycles: Array<{
+    id: string;
+    synthesis_kind: string;
+    status: string;
+    conclusion?: string;
+    result_ids?: string[];
+    input_manifest: Array<{ ref: string; revision: string; kind: string; start: number; end: number; complete: boolean }>;
+    omitted_manifest: unknown[];
+    consumption_status: string;
+    projection_status: string;
+    partial_inputs: number;
+    model_calls: Array<{ id: string; model?: string; provider?: string; success?: boolean; status?: string }>;
+  }>;
+}
+
+export interface LearningTuning {
+  min_cases: number;
+  validated_cases: number;
+  development_cases: number;
+  heldout_cases: number;
+  readiness: string;
+  reason?: string;
+  active_policy?: Record<string, unknown> | null;
+  latest_run?: Record<string, unknown> | null;
+  latest_evaluation?: Record<string, unknown> | null;
+  policies?: Array<Record<string, unknown>>;
 }
 
 export interface LearningPage {

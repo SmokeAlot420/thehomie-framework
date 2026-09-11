@@ -23,6 +23,10 @@ PRIORITIES = {
     "experience": 40,
     "candidate": 45,
     "practice": 50,
+    "reflection": 25,
+    "dream": 26,
+    "tuning": 70,
+    "tuning_regression": 18,
 }
 
 COGNITIVE_REVISIT_PRIORITY = 11
@@ -209,6 +213,8 @@ class LearningQueue:
             "observation": "observe",
             "cognition": "cognitive_reason",
             "investigation": "cognitive_observe",
+            "reflection": "synthesis_reason",
+            "dream": "synthesis_reason",
         }.get(kind, "propose")
         if kind in {"candidate", "requalification", "regression"} and values.get("candidate_id"):
             stage = "design"
@@ -262,23 +268,39 @@ class LearningQueue:
                 )
             ]
 
-    def claim(self, *, ttl_seconds: float | None = None, now: float | None = None) -> dict | None:
+    def claim(
+        self,
+        *,
+        ttl_seconds: float | None = None,
+        now: float | None = None,
+        job_id: str | None = None,
+    ) -> dict | None:
+        if job_id is not None:
+            if not isinstance(job_id, str) or not job_id.strip() or len(job_id) > 256:
+                raise LearningError("target learning job must be a bounded identifier")
+            if not self.path.exists():
+                return None
         instant = time.time() if now is None else now
         ttl = 90.0 if ttl_seconds is None else ttl_seconds
+        target_filter = " AND id=?" if job_id is not None else ""
+        params = (
+            (self.persona_id, instant, job_id) if job_id is not None else (self.persona_id, instant)
+        )
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "UPDATE learning_jobs SET status='queued',token=NULL,expires_at=NULL "
-                "WHERE persona_id=? AND status='running' AND expires_at<=?",
-                (self.persona_id, instant),
+                "WHERE persona_id=? AND status='running' AND expires_at<=?" + target_filter,
+                params,
             )
             row = db.execute(
                 "SELECT * FROM learning_jobs WHERE persona_id=? "
                 "AND status IN ('queued','deferred','retry') AND available_at<=? "
+                + target_filter
                 # An old unavailable job must not retake every persona wake.
                 # Within one urgency class, work waiting longer to run goes first.
-                "ORDER BY priority,available_at,created_at,id LIMIT 1",
-                (self.persona_id, instant),
+                + " ORDER BY priority,available_at,created_at,id LIMIT 1",
+                params,
             ).fetchone()
             if row is None:
                 return None

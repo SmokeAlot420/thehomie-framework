@@ -347,7 +347,9 @@ def test_readonly_v1_then_backed_up_additive_upgrade(service):
             db.execute("SELECT count(*) FROM records WHERE id=?", (exp["id"],)).fetchone()[0] == 1
         )
     with sqlite3.connect(service.store.path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        from personas.learning.store import SCHEMA_VERSION
+
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 @pytest.mark.parametrize("kind", ["deadline", "closed_candles", "crossing", "source_update"])

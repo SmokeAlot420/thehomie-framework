@@ -307,11 +307,12 @@ async def test_knowledge_evaluation_identity_includes_version_even_with_custom_k
     async def support(*args, **kwargs):
         return {"supported": True, "contradictions_addressed": True, "changes_behavior": False}
 
+    original_version = ev.EVALUATOR_VERSION
     first = await ev.evaluate_candidate(service, candidate["id"], judge=support, run_key="same")
     monkeypatch.setattr(ev, "EVALUATOR_VERSION", "persona-learning-paired-future")
     second = await ev.evaluate_candidate(service, candidate["id"], judge=support, run_key="same")
     assert first["evaluation_run_key"] != second["evaluation_run_key"]
-    assert service.get_record(first["id"])["evaluator_version"] == "persona-learning-paired-v3"
+    assert service.get_record(first["id"])["evaluator_version"] == original_version
 
 
 def test_recovery_only_reopens_classified_infrastructure_jobs(setup):

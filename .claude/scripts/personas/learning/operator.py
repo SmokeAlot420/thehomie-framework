@@ -39,6 +39,16 @@ _LINK_FIELDS = frozenset(
         "execution_id",
         "result_ids",
         "latest_evidence_ids",
+        "derived_input_ids",
+        "corpus_id",
+        "run_id",
+        "policy_id",
+        "baseline_policy_id",
+        "proposal_id",
+        "receipt_id",
+        "case_ids",
+        "development_ids",
+        "heldout_ids",
     }
 )
 _KINDS = frozenset(
@@ -55,6 +65,14 @@ _KINDS = frozenset(
         "cognitive_cycle",
         "understanding",
         "investigation",
+        "synthesis_cycle",
+        "synthesis_request",
+        "change_proposal",
+        "tuning_case",
+        "tuning_corpus",
+        "tuning_run",
+        "tuning_evaluation",
+        "tuning_policy",
     }
 )
 _ATTENTION_STATUSES = frozenset(
@@ -113,6 +131,22 @@ class LearningOperator:
                 for version in row.get("included", [])
                 if isinstance(version, dict)
             ]
+            references["source records"] = [
+                source.get("metadata", {}).get("record_id", "")
+                for source in row.get("input_manifest", [])
+                if isinstance(source, dict) and isinstance(source.get("metadata", {}), dict)
+            ]
+            references["event receipts"] = [
+                value
+                for event in row.get("history", [])
+                for payload in [
+                    event.get("payload", {}),
+                    event.get("payload", {}).get("metadata", {}),
+                ]
+                for field in _LINK_FIELDS
+                for raw in [payload.get(field, [])]
+                for value in (raw if isinstance(raw, list) else [raw])
+            ]
             for field, raw in references.items():
                 values = raw if isinstance(raw, list) else [raw]
                 for record_id in values[:60]:
@@ -151,7 +185,29 @@ class LearningOperator:
             "queue": _safe(data.get("queue", {"pending": 0, "statuses": {}, "jobs": []})),
             "recent_failures": [self._present(row) for row in data["failures"]],
             "cognition": _safe(reporting.cognition_overview(self.service)),
+            "lifecycle": _safe(reporting.lifecycle_overview(self.service)),
+            "tuning": self.tuning_status(),
         }
+
+    def lifecycle(self) -> dict:
+        from personas.learning import reporting
+
+        return _safe(reporting.lifecycle_overview(self.service))
+
+    def tuning_status(self) -> dict:
+        from evolve import tuning
+
+        return _safe(tuning.tuning_status(self.service))
+
+    async def run_tuning(self) -> dict:
+        from evolve import tuning
+
+        return _safe(await tuning.tune(self.service))
+
+    def rollback_tuning(self) -> dict:
+        from evolve import tuning
+
+        return _safe(tuning.rollback_policy(self.service, reason="Operator requested rollback"))
 
     def report(self, *, since: str | None = None, until: str | None = None) -> dict:
         from personas.learning import reporting
@@ -205,9 +261,7 @@ class LearningOperator:
         row = self.service.get_record(_record_id(record_id))
         if row is None:
             raise LookupError("Learning record not found")
-        result = self._present(row, links=True)
-        result["payload"]["history"] = _safe(self.service.store.events(record_id))
-        return result
+        return self._present({**row, "history": self.service.store.events(record_id)}, links=True)
 
     def set_paused(self, paused: bool) -> dict:
         self.service.set_paused(paused)

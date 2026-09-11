@@ -349,8 +349,13 @@ class ConversationEngine:
         # reset_shots_callback_for_session.
         self._shots_callback_fired: OrderedDict[tuple[str, str], None] = OrderedDict()
 
-    def _build_active_inference_region(self) -> str:
+    def _build_active_inference_region(
+        self, *, retained_context=None, return_context: bool = False,
+    ):
         """Render active user inferences as a WorkingMemory system region."""
+
+        def result(text, context=retained_context):
+            return (text, context) if return_context else text
 
         try:
             from cognition.self_model import InferenceTracker
@@ -362,7 +367,7 @@ class ConversationEngine:
                 INFERENCE_STATE_FILE,
             )
         except ImportError:
-            return ""
+            return result("")
 
         try:
             tracker = InferenceTracker(INFERENCE_STATE_FILE)
@@ -379,7 +384,7 @@ class ConversationEngine:
             logging.getLogger(__name__).warning(
                 "user_inferences region skipped: %s", exc,
             )
-            return ""
+            return result("")
 
         # Living Self Act 1 (B1, defense-in-depth): the live renderer injects
         # ONLY trustworthy operator-belief sources. This is the belt to the
@@ -404,11 +409,19 @@ class ConversationEngine:
         ]
 
         if not active:
-            return ""
+            return result("")
 
         active.sort(key=lambda r: r.last_updated or "", reverse=True)
         active.sort(key=lambda r: r.confidence, reverse=True)
         active.sort(key=lambda r: 0 if r.status == "confirmed" else 1)
+
+        from personas.learning.legacy_beliefs import partition_legacy_context
+
+        active, retained_context = partition_legacy_context(
+            active[:INFERENCE_PROMPT_CAP], retained_context,
+        )
+        if not active:
+            return result("", retained_context)
 
         inference_lines = []
         for inf in active[:INFERENCE_PROMPT_CAP]:
@@ -422,7 +435,7 @@ class ConversationEngine:
             if inf.contradiction_count > 0:
                 status_tag = f"{status_tag} · held-under-tension"
             inference_lines.append(f"- [{status_tag}] {inf.inference}")
-        return "## Active Beliefs About User\n" + "\n".join(inference_lines)
+        return result("## Active Beliefs About User\n" + "\n".join(inference_lines), retained_context)
 
     def _build_profile_skill_index(self) -> str:
         """Build a persona-aware skill index for the active profile."""
@@ -513,11 +526,13 @@ class ConversationEngine:
         *,
         prefetched_context: str = "",
         recent_conversation: list[dict[str, str]] | None = None,
+        retained_context=None,
+        return_context: bool = False,
     ) -> Any:
         """Build the WorkingMemory object that owns chat prompt context."""
 
         if not _COGNITION_AVAILABLE:
-            return None
+            return (None, retained_context) if return_context else None
 
         from config import MEMORY_DIR
 
@@ -539,14 +554,18 @@ class ConversationEngine:
         if _PROCESSES_AVAILABLE:
             skill_text = self._build_profile_skill_index()
 
-        return build_initial_working_memory(
+        active_inferences, retained_context = self._build_active_inference_region(
+            retained_context=retained_context, return_context=True,
+        )
+        memory = build_initial_working_memory(
             soul_name="the_homie",
             vault_files=vault_files,
             skill_index=skill_text,
-            active_inferences=self._build_active_inference_region(),
+            active_inferences=active_inferences,
             prefetched_context=prefetched_context,
             recent_conversation=recent_conversation,
         )
+        return (memory, retained_context) if return_context else memory
 
     def _build_frozen_regions(self) -> list[Any]:
         """Read identity files fresh through WorkingMemory ownership.
@@ -1235,6 +1254,15 @@ class ConversationEngine:
             decision.update(
                 fired=True, reason="fired_content", monologue_chars=len(thought),
             )
+            # Only bounded execution metadata crosses into durable learning;
+            # the private foreground thought stays in transient working memory.
+            for memory in reversed(getattr(out, "memories", ())):
+                if memory.region != "internal":
+                    continue
+                receipt = dict(getattr(memory, "metadata", ())).get("runtime_receipt")
+                if isinstance(receipt, dict) and receipt.get("success"):
+                    decision["runtime_receipt"] = receipt
+                break
             # B2 — REAL action wire: operator_notification queues; integration
             # dispatch stays default-denied inside maybe_queue_actions via
             # evaluate_action_policy -> require_integration_action. Best-effort.
@@ -1504,11 +1532,15 @@ class ConversationEngine:
             action = "create"
 
         try:
+            from personas.learning import hooks as learning_hooks
+
+            source_origin = learning_hooks.incoming_origin(message, session_key)
             self.session_store.add_message(
                 session_key,
                 "user",
                 _incoming_display_text(message),
                 message.timestamp,
+                source_ref=f"chat-message:{source_origin}:user",
             )
             self.session_store.add_message(
                 session_key,
@@ -1516,6 +1548,7 @@ class ConversationEngine:
                 response_text,
                 now,
                 tool_calls=normalized_tool_calls,
+                source_ref=f"chat-message:{source_origin}:assistant",
             )
         except Exception as e:
             print(f"[{datetime.now()}] [Messages] Persist failed (non-blocking): {e}")
@@ -1919,12 +1952,26 @@ class ConversationEngine:
                 f"{message.prefetched_context}"
             )
         attachment_context_text = build_attachment_context(message.attachments)
+        from personas.learning import hooks as learning_hooks
+        import personas as learning_personas
 
-        current_wm = (
-            self._build_base_working_memory(prefetched_context=prefetched_region_text)
-            if _COGNITION_AVAILABLE
-            else None
-        )
+        prepared_learning_context = None
+        try:
+            prepared_learning_context = await asyncio.to_thread(
+                learning_hooks.prepare_retained_context,
+                learning_personas.get_active_profile_name() or "default",
+                message.text,
+            )
+        except Exception as exc:
+            print(f"[{datetime.now()}] [Learning] Context preparation failed: {type(exc).__name__}")
+
+        current_wm = None
+        if _COGNITION_AVAILABLE:
+            current_wm, prepared_learning_context = self._build_base_working_memory(
+                prefetched_context=prefetched_region_text,
+                retained_context=prepared_learning_context,
+                return_context=True,
+            )
         recall_response = None
         if not _RECALL_SERVICE_AVAILABLE and _trace_decisions is not None:
             _trace_decisions["recall"] = {
@@ -1976,6 +2023,12 @@ class ConversationEngine:
         if _COGNITION_AVAILABLE:
             budgets = adjusted_budgets if adjusted_budgets else REGION_BUDGETS
             turn_wm = current_wm
+            if prepared_learning_context and prepared_learning_context.text:
+                turn_wm = turn_wm.with_memory(Memory(
+                    role="system", content=prepared_learning_context.text,
+                    region="persona_learning", source="learning_journal",
+                    metadata=(("context_hash", prepared_learning_context.context_hash),),
+                ))
             if current_speaker_block.strip():
                 turn_wm = turn_wm.with_memory(Memory(
                     role="system",
@@ -2122,7 +2175,7 @@ class ConversationEngine:
             # "challenge" regions extracted a few lines up. `recent_region_meta`
             # still reports the real size to trace_decisions.
             regions = prompt_regions_from_working_memory(
-                turn_wm.without_regions("recent_conversation"), budgets,
+                turn_wm.without_regions("recent_conversation", "persona_learning"), budgets,
             )
             if regions:
                 system_prompt["append"] = (
@@ -2376,6 +2429,7 @@ class ConversationEngine:
             resume=resume_session_id or None,
             metadata={
                 "speaker_context": speaker_context_metadata(current_speaker),
+                "foreground_cognition": dict((_trace_decisions or {}).get("cognitive_pass") or {}),
                 **(
                     {"tool_scope_version": persona_scope_version}
                     if persona_scope_version is not None
@@ -2392,6 +2446,10 @@ class ConversationEngine:
             surface="chat_engine",
             origin_id=learning_hooks.incoming_origin(message, session_key),
             task=message.text,
+            prepared_context=prepared_learning_context,
+            capture_metadata={"source_evidence": [learning_hooks.message_source(
+                learning_hooks.incoming_origin(message, session_key), "user", _incoming_display_text(message)
+            )]},
         )
         await asyncio.to_thread(learning_turn.capture_sources, {"prefetched_context": message.prefetched_context})
         runtime_request = learning_turn.request

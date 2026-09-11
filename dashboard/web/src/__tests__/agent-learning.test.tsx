@@ -38,6 +38,44 @@ describe('persona learning operator panel', () => {
     expect(screen.getByText('evaluate · retry')).toBeInTheDocument();
   });
 
+  it('shows exact synthesis provenance and tuning readiness while initial loads stay read-only', async () => {
+    const actions: string[] = [];
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input);
+      if (init?.method === 'POST') { actions.push(path); return response({ status: path.endsWith('/rollback') ? 'rolled_back' : 'queued' }); }
+      return response(path.includes('/records?') ? { records: [], next_cursor: null } : {
+        ...summary(),
+        lifecycle: {
+          persona_id: 'main', pending_scope: 'Admitted cycles only; unadmitted sources are not scanned by this read.',
+          synthesis: { dream: { pending_cycles: 1, completed_cycles: 0, consumed_sources: 1, consumed_characters: 12,
+            latest_request: { status: 'queued' }, pending_consumers: [{ cycle_id: 'dream-1', status: 'retained', input_count: 1 }] } },
+          pending_stages: [{ id: 'job', kind: 'dream', stage: 'synthesis_support', status: 'deferred', reason: 'Provider unavailable' }],
+          request_statuses: { queued: 1, no_signal: 2 },
+          recent_cycles: [{ id: 'dream-1', synthesis_kind: 'dream', status: 'retained', conclusion: 'A tentative interpretation.',
+            input_manifest: [{ ref: 'episode:sample', revision: 'revision-a', kind: 'episode', start: 0, end: 12, complete: false }],
+            omitted_manifest: [{ start: 12, end: 30 }], consumption_status: 'consumed', projection_status: 'pending', partial_inputs: 1,
+            result_ids: ['idea-1'], model_calls: [{ id: 'execution-1', provider: 'fake-provider', model: 'fake-model', status: 'executed' }] }],
+        },
+        tuning: { min_cases: 60, validated_cases: 8, development_cases: 0, heldout_cases: 0, readiness: 'not_ready', reason: 'insufficient_validated_cases',
+          latest_run: { id: 'run-1', status: 'no_change' }, latest_evaluation: null, active_policy: { id: 'policy-1', status: 'active' }, policies: [{ id: 'policy-1' }] },
+      });
+    }) as typeof fetch;
+    render(<AgentLearning agentId="main" />);
+    await screen.findByText('Recall tuning');
+    expect(screen.getByText('8 / 60')).toBeInTheDocument();
+    expect(screen.getByText(/1 partial inputs · 1 omitted inputs/)).toBeInTheDocument();
+    expect(screen.getByText(/Recorded model calls: 1 · fake-provider/)).toBeInTheDocument();
+    expect(screen.getByText(/episode:sample · revision revision-a · \[0, 12\)/)).toBeInTheDocument();
+    expect(actions).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Request tuning run' }));
+    await waitFor(() => expect(actions).toEqual(['/api/agents/main/learning/tuning/run']));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Roll back recall policy' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back recall policy' }));
+    expect(actions).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm recall rollback' }));
+    await waitFor(() => expect(actions).toEqual(['/api/agents/main/learning/tuning/run', '/api/agents/main/learning/tuning/rollback']));
+  });
+
   it('shows methods and evidence, and sends no action on initial render', async () => {
     const requests: Array<{ path: string; method: string }> = [];
     globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

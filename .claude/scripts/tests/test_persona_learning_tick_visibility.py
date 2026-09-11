@@ -1,9 +1,10 @@
-"""Failure visibility + retry cadence for the persona learning tick.
+"""Shared admission visibility and retained legacy tick regression coverage.
 
 Reproduced 2026-09-02: crypto's child exited 1 with the cause on STDOUT, the
 parent kept only a stderr tail, the receipt read ``exit 1: ``, Task Scheduler
 showed ``Last Result: 0``, and the 12h guard on a 12h cadence pushed the retry
-to the next day. Each test here fails without its fix.
+to the next day. Child, lock and stamp regressions explicitly exercise retained
+legacy helpers; scheduled-entrypoint assertions exercise shared admission.
 """
 
 from __future__ import annotations
@@ -119,7 +120,7 @@ def _run_roster(
     settings: SimpleNamespace | None = None,
     once: bool = False,
 ) -> tuple[tick.TickOutcome, dict[str, dict], MagicMock]:
-    """Drive run_tick over personas alpha+beta with every seam stubbed.
+    """Drive the retained legacy helper over alpha+beta with isolated seams.
 
     Returns (outcome, {persona: state-file-dict}, spawn mock).
     """
@@ -147,6 +148,8 @@ def _run_roster(
         patch.object(tick, "_count_attributed_rows_since", return_value=5),
         patch.object(tick, "_count_fresh_notes_since", return_value=0),
         patch.object(tick, "_spawn_persona_pipeline", spawn),
+        patch("personas.learning.worker.run_pending_profiles", return_value=[]),
+        patch.dict("os.environ", {}, clear=False),
         patch.object(tick, "STATE_DIR", state_dir),
         patch.object(
             tick,
@@ -154,7 +157,7 @@ def _run_roster(
             side_effect=lambda n: state_dir / f"persona-learning-{n}-state.json",
         ),
     ):
-        outcome = tick.run_tick(once=once)
+        outcome = tick._run_legacy_tick(once=once)
 
     states = {}
     for f in state_dir.glob("persona-learning-*-state.json"):
@@ -185,11 +188,15 @@ class TestTickOutcomeAndExitCode:
         out = capsys.readouterr().out
         assert "2 persona(s) FAILED this tick: alpha, beta" in out
 
-    def test_early_exits_still_return_an_outcome(self, tmp_path: Path) -> None:
-        with patch.object(
-            tick, "get_persona_learning_settings", return_value=_settings(enabled=False)
+    def test_legacy_disabled_early_exit_still_returns_an_outcome(self, tmp_path: Path) -> None:
+        with (
+            patch.object(
+                tick, "get_persona_learning_settings", return_value=_settings(enabled=False)
+            ),
+            patch.object(tick, "STATE_DIR", tmp_path / "state"),
+            patch("personas.learning.worker.run_pending_profiles", return_value=[]),
         ):
-            outcome = tick.run_tick()
+            outcome = tick._run_legacy_tick()
         assert outcome == tick.TickOutcome()
 
     def test_main_exits_nonzero_when_any_persona_failed(self) -> None:
@@ -215,6 +222,80 @@ class TestTickOutcomeAndExitCode:
         assert "exit $EXITCODE" in sh
         assert "FAILED" in sh
         assert "exit /b %EXITCODE%" in bat
+
+
+class TestSharedAdmissionVisibility:
+    def test_admission_failure_is_visible_and_next_profile_still_queues(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        from personas.learning import service, synthesis
+
+        roster = [_profile("alpha", tmp_path / "alpha"), _profile("beta", tmp_path / "beta")]
+        default = SimpleNamespace(name="default", is_default=True)
+        targets = {profile.name: SimpleNamespace(name=profile.name) for profile in roster}
+        calls = []
+
+        def admit(target, kind, **kwargs):
+            calls.append((target.name, kind, kwargs))
+            if target.name == "alpha":
+                raise OSError("temporary queue failure")
+            return {"status": "queued", "cycle_id": "beta-cycle"}
+
+        monkeypatch.setattr(tick, "is_active_default_profile", lambda: True)
+        monkeypatch.setattr(tick, "list_profiles", lambda: [default, *roster])
+        monkeypatch.setattr(service, "get_learning_service", targets.__getitem__)
+        monkeypatch.setattr(synthesis, "request_synthesis", admit)
+        spawn = MagicMock(side_effect=AssertionError("shared admission must not spawn a pipeline"))
+        monkeypatch.setattr(tick, "_spawn_persona_pipeline", spawn)
+
+        assert tick.run_tick() == tick.TickOutcome(spawned=("beta",), failed=("alpha",))
+        assert [(name, kind) for name, kind, _ in calls] == [
+            ("alpha", "reflection"), ("beta", "reflection")
+        ]
+        assert all(row[2]["source_key"].startswith("legacy-reflection-tick:") for row in calls)
+        assert "alpha: admission failed (OSError)" in capsys.readouterr().out
+        spawn.assert_not_called()
+        assert not list(tmp_path.rglob("persona-learning-*-state.json"))
+
+    def test_repeated_ticks_coalesce_one_real_queue_cycle_and_preserve_other_profiles(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from personas.learning import service, synthesis_sources
+        from personas.learning.models import LearningTarget
+        from personas.learning.queue import LearningQueue
+
+        targets = {}
+        for name in ("default", "alpha", "beta"):
+            root = tmp_path / name
+            targets[name] = service.LearningService(LearningTarget(
+                name, root / "memory", root / "data", root / "state", root / "skills"
+            ))
+        target = targets["alpha"]
+        monkeypatch.setenv("PERSONA_LEARNING_ENABLED", "true")
+        monkeypatch.delenv("HOMIE_KILLSWITCH_HARNESS_LEARNING", raising=False)
+        target.capture_experience("message-1", "test", "Observed a useful source.")
+        monkeypatch.setattr(tick, "is_active_default_profile", lambda: True)
+        monkeypatch.setattr(tick, "list_profiles", lambda: [
+            SimpleNamespace(name="default", is_default=True), _profile("alpha", tmp_path / "alpha")
+        ])
+        monkeypatch.setattr(service, "get_learning_service", targets.__getitem__)
+        monkeypatch.setattr(synthesis_sources, "collect_sources", lambda *args, **kwargs: [])
+        spawn = MagicMock(side_effect=AssertionError("admission cannot execute a child"))
+        monkeypatch.setattr(tick, "_spawn_persona_pipeline", spawn)
+
+        first, second = tick.run_tick(), tick.run_tick()
+        assert first == second == tick.TickOutcome(spawned=("alpha",))
+        cycles = target.store.all("synthesis_cycle")
+        assert len(cycles) == 1 and cycles[0]["status"] == "pending"
+        jobs = [row for row in LearningQueue(target).list() if row["kind"] == "reflection"]
+        assert len(jobs) == 1 and jobs[0]["payload"]["cycle_id"] == cycles[0]["id"]
+        assert {row["status"] for row in target.store.all("synthesis_request")} == {
+            "queued", "coalesced"
+        }
+        assert not targets["default"].store.path.exists()
+        assert not targets["beta"].store.path.exists()
+        assert not list(tmp_path.rglob("persona-learning-*-state.json"))
+        spawn.assert_not_called()
 
 
 # ── Recency guard: a 12h guard must fire on a 12h cadence ───────────────────

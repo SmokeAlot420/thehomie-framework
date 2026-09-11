@@ -18,7 +18,7 @@ describe('learning proxy', () => {
     });
   });
 
-  it.each(['pause', 'resume', 'activations/act_1/rollback'])('forwards %s once to Python', async (path) => {
+  it.each(['pause', 'resume', 'activations/act_1/rollback', 'tuning/run', 'tuning/rollback'])('forwards %s once to Python', async (path) => {
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify({ persona_id: 'default', paused: true })));
     globalThis.fetch = fetchMock as typeof fetch;
     const response = await agentsRoute.request(`/api/agents/main/learning/${path}`, { method: 'POST' });
@@ -26,6 +26,16 @@ describe('learning proxy', () => {
     expect(fetchMock.mock.calls[0][0]).toBe(`http://127.0.0.1:4322/api/agents/default/learning/${path}`);
     expect(fetchMock.mock.calls[0][1]?.method).toBe('POST');
     expect(response.status).toBe(200);
+  });
+
+  it.each(['lifecycle', 'tuning'])('reads %s without forwarding caller controls', async (path) => {
+    const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify({ persona_id: 'default', status: 'not_ready' })));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const response = await agentsRoute.request(`/api/agents/main/learning/${path}?force=true&token=secret`);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe(`http://127.0.0.1:4322/api/agents/default/learning/${path}`);
+    expect(fetchMock.mock.calls[0][1]?.method ?? 'GET').toBe('GET');
+    expect(await response.json()).toMatchObject({ persona_id: 'main', status: 'not_ready' });
   });
 
   it('preserves missing evidence and rollback conflicts', async () => {

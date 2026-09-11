@@ -76,6 +76,13 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def message_source(origin: str, role: str, text: str) -> dict:
+    """Same host identity and content revision as persisted ChatMessage rows."""
+    return {"ref": f"chat-message:{origin}:{role}", "revision": hashlib.sha256(
+        json.dumps([role, text], ensure_ascii=False).encode("utf-8")
+    ).hexdigest()}
+
+
 def _runtime_meta(result: Any) -> dict:
     return {
         name: getattr(result, name, None)
@@ -488,6 +495,8 @@ class SurfaceTurn:
                         "provider": getattr(result, "provider", None),
                         "artifact": text,
                         "artifact_hash": _hash(text),
+                        "source_evidence": [message_source(self.origin_id, "assistant", text)]
+                        if self.surface == "chat_engine" else [],
                         "publication_confirmed": False,
                         "runtime": _runtime_meta(result),
                         "cognitive_hook_adapter": adapter,
@@ -544,6 +553,16 @@ class SurfaceTurn:
                 self.failure("runtime_failure", capture_exc)
 
 
+def prepare_retained_context(persona_id: str, task: str):
+    """Select once before foreground reasoning; no new experience or model call."""
+    from .models import LearningContext
+
+    service = _service_for(persona_id)
+    if not service.enabled():
+        return LearningContext()
+    return service.render_cognitive_context(task, max_chars=4000)
+
+
 def prepare_turn(
     request: Any,
     *,
@@ -556,6 +575,7 @@ def prepare_turn(
     task: str | None = None,
     capture_only: bool = False,
     capture_metadata: dict | None = None,
+    prepared_context: Any = None,
 ) -> SurfaceTurn:
     """Attach relevant content and receipts without modifying identity or tools.
 
@@ -608,8 +628,20 @@ def prepare_turn(
             request.metadata["learning"]["coverage"] = "host_capture_only; no_model_request"
             return turn
         renderer = getattr(turn.service, "render_cognitive_context", turn.service.render_context)
-        turn.context = renderer(request.prompt, max_chars=4000, model=request.model)
-        turn.enqueue_cognition("reorient", reason="work_start_or_resume")
+        turn.context = prepared_context if prepared_context is not None else renderer(
+            task if task is not None else request.prompt, max_chars=4000, model=request.model
+        )
+        foreground = request.metadata.get("foreground_cognition") or {}
+        receipt = dict(foreground.get("runtime_receipt") or {})
+        receipt["context_hash"] = turn.context.context_hash
+        reorientation = turn.service.record_reorientation(
+            turn.experience["id"], origin_id, receipt=receipt, context=turn.context,
+        )
+        request.metadata["learning"]["reorientation"] = {
+            "cycle_id": reorientation["id"],
+            "execution_kind": reorientation["execution_kind"],
+            "model_call_count": reorientation["model_call_count"],
+        }
         from personas.learning import reporting
         from personas.learning.operator import LearningOperator
 

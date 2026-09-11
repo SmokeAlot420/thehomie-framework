@@ -138,7 +138,8 @@ def compile_cognitive_context(
     for _, _, _, record in rows:
         if record["kind"] == "understanding":
             body = (
-                f"{record['title']}\nScope: {record['scope']}\n{record['content']}\n"
+                f"{record['title']}\nType: {record['understanding_type']}\n"
+                f"Scope: {record['scope']}\n{record['content']}\n"
                 f"Uncertainty: {record['uncertainty']}"
             )
         else:
@@ -166,6 +167,11 @@ def compile_cognitive_context(
                 "content": body,
                 "rendered_block": block,
                 "status": record["status"],
+                **(
+                    {"understanding_type": record["understanding_type"]}
+                    if record["kind"] == "understanding"
+                    else {}
+                ),
             }
         )
     return LearningContext(text, tuple(versions), content_hash(text))

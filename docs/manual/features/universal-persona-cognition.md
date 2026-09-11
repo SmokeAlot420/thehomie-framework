@@ -28,7 +28,39 @@ capability shipped to the main homie is a gap on every persona until ported.
 Learning grants MEMORY, never capabilities — every external-mutation gate is
 untouched by this system.
 
-## The foundation: experience, reflection, and dream
+## Unified Lifecycle
+
+The unified implementation coordinates experience, interpretation, reflection,
+deeper dream consolidation, appropriate evaluation, and later use through the
+same persona-local journal and queue. Existing scheduled reflection and dream
+commands admit or wake this work. The foreground runtime has priority; pause,
+explicit disable, provider deferral, and retry policy apply to every stage.
+
+Tentative understanding can be retained immediately. Supported descriptive
+knowledge requires source support; standing behavioral changes require independent
+qualification through the shared authority. Explicit operator instructions and
+manual edits retain their authority. Repeated appearances of one source are not
+independent evidence. Legacy beliefs and journal versions link back to the same
+source identities, so contradictions and supersession reach later readers.
+
+Reflection and dream inputs include changed journal understanding, open
+investigations, original observations, counterevidence, and episode excerpts.
+Exact source revision/range manifests distinguish consumed, partial, and omitted
+inputs. Retained investigative conclusions can seed a procedure proposal as
+derived context without becoming a fresh observation.
+
+The Learning tab and `profile learning lifecycle` expose stage receipts, output
+IDs, pending consumers, skips, and actual model calls. Retrieval tuning has its
+own labeled cases, source-family split, comparisons, versioned policy, and
+rollback. See the [operator contract](persona-harness-learning.md#unified-reflection-dreaming-and-recall-tuning).
+These are implementation contracts; installation-specific live acceptance and
+release receipts must be checked separately.
+
+## Foundation Before Lifecycle Unification
+
+The following diagram records the earlier architecture. Its direct automatic
+reflection/dream writers and separate eligibility are superseded by the shared
+admission and authority described above.
 
 ```
 create persona ──► BORN LEARNING (config written at every creation door)
@@ -104,21 +136,20 @@ counterevidence can retire a method and prompt a revision. The
 [harness developer guide](persona-harness-learning-developer.md) explains the
 shared hooks and domain evidence collectors.
 
-New profiles still write `learning.enabled: true`. For older valid profiles,
-legacy reflection requires that explicit eligibility; the harness defaults on
-when the section or key is absent. Explicit `false` disables both. Harness pause
-suppresses new harness capture, dynamic context, and worker activity while
-preserving its history and any already applied skills/amendments. It does not
-pause legacy reflection. Rollback is the separate operation that retires an
-adopted method.
+New profiles write `learning.enabled: true`; valid profiles without the section
+or key use the shared lifecycle default. Explicit `false` disables admission and
+work. Pause suppresses capture, dynamic learned context, and background lifecycle
+activity, including synthesis and tuning, while preserving history and already
+applied skills/amendments. Rollback separately retires an adopted method or
+restores a predecessor retrieval policy.
 
 ## What runs when (scheduled inventory)
 
 | Job | Cadence | Silent path | State |
 |---|---|---|---|
 | Worktick experience writer | per executed assignment | receipt `error` never fails the assignment | note receipt in the worktick result |
-| `persona_learning_tick.py` | scheduled (12h recency guard) | `PERSONA_REFLECT_SILENT` (no chat rows AND no fresh notes) | `persona-learning-<name>-state.json` (main STATE_DIR); `last_attempt`/`last_run` split |
-| `persona_dream_tick.py` | nightly after the main dream | `DREAM_SILENT` per persona (zero LLM) | fan-out stamps in main STATE_DIR; each persona's `dream-state.json` in ITS profile tree |
+| `persona_learning_tick.py` | scheduled reflection compatibility entry point | unchanged source/interval/disabled receipt invokes no model | shared persona synthesis journal and queue |
+| `persona_dream_tick.py` | nightly dream compatibility entry point | no useful new source or disabled receipt invokes no model | shared dream admission and exact consumption receipts |
 | Curriculum tick | per-persona cadence | disabled curricula skipped free | curriculum ledger per profile |
 | Cognitive dispatcher and harness worker | supervised chat-service dispatcher checks every 60 seconds; existing heartbeat/reflection/dream seams provide recovery wakes | no useful or due work invokes no model; foreground work, pause, or unavailable capabilities defer work | per-profile learning journal and queue, plus installation-wide dispatcher/learner/activity leases |
 

@@ -27,6 +27,10 @@ _observers: dict[str, Callable] = {}
 COGNITIVE_VERSION = "persona-cognition-v1"
 
 
+class InvestigationEvidencePendingError(LearningUnavailableError):
+    """An evidence-only poll found no new source; other ready work may proceed."""
+
+
 def register_investigation_observer(domain: str, observer: Callable) -> None:
     if not isinstance(domain, str) or not domain.strip() or not callable(observer):
         raise LearningError("observer needs a host-owned domain and callable")
@@ -123,6 +127,16 @@ def _local_observer(service, investigation: dict) -> dict:
     }
 
 
+def _fresh_investigation_anchor(service, inquiry: dict) -> dict | None:
+    """Bounded search for the original newer source, never a generated envelope."""
+    for observation in service.store.list("observation", limit=200)["items"]:
+        try:
+            return service.validate_investigation_anchor(inquiry, observation["id"])
+        except LearningError:
+            continue
+    return None
+
+
 def discover_cognitive_work(
     service, now: float | None = None, *, recover_sources: bool = True
 ) -> int:
@@ -166,7 +180,9 @@ def discover_cognitive_work(
             )
     prior = queue.list(include_finished=True)
     for inquiry in service.store.all("investigation"):
-        if inquiry.get("status") in {"completed", "cancelled"}:
+        if inquiry.get("status") not in {"open", "due", "pending", "blocked"}:
+            continue
+        if not inquiry.get("experience_id") and _observer(inquiry["domain"]) is None:
             continue
         if any(
             c.get("investigation_id") == inquiry["id"] and c.get("status") != "completed"
@@ -202,7 +218,7 @@ async def _collect(service, job: dict) -> tuple[str, dict]:
 
     payload = dict(job["payload"])
     inquiry = service._owned(payload["investigation_id"], "investigation")
-    if inquiry["status"] in {"completed", "cancelled"}:
+    if inquiry["status"] not in {"open", "due", "pending", "blocked"}:
         return "done", payload
     observer = _observer(inquiry["domain"])
     if observer is None:
@@ -212,14 +228,27 @@ async def _collect(service, job: dict) -> tuple[str, dict]:
             source_key=f"observer-missing:{inquiry['domain']}",
             reason="No installed observation provider for this domain",
         )
-        raise LearningUnavailableError("No installed investigation observer")
+        raise InvestigationEvidencePendingError("No installed investigation observer")
+    anchor = (
+        _fresh_investigation_anchor(service, inquiry) if not inquiry.get("experience_id") else None
+    )
     try:
-        result = (
-            observer(service, inquiry)
-            if inspect.iscoroutinefunction(observer)
-            else await asyncio.to_thread(observer, service, inquiry)
-        )
-        result = await result if inspect.isawaitable(result) else result
+        if anchor:
+            result = {
+                "available": True,
+                "observation_id": anchor["id"],
+                "source_key": anchor.get("source_revision", anchor["id"]),
+                "occurred_at": anchor.get("occurred_at", anchor["created_at"]),
+                "quality": anchor["quality"],
+                "evidence": anchor["evidence"],
+            }
+        else:
+            result = (
+                observer(service, inquiry)
+                if inspect.iscoroutinefunction(observer)
+                else await asyncio.to_thread(observer, service, inquiry)
+            )
+            result = await result if inspect.isawaitable(result) else result
     except (OSError, TimeoutError, ConnectionError) as exc:
         raise LearningUnavailableError("Investigation observation provider unavailable") from exc
     if not isinstance(result, dict) or type(result.get("available")) is not bool:
@@ -228,11 +257,11 @@ async def _collect(service, job: dict) -> tuple[str, dict]:
         reason = str(result.get("reason", "Evidence unavailable"))[:1000]
         service.transition_investigation(
             inquiry["id"],
-            "pending",
+            "pending" if inquiry.get("experience_id") else "blocked",
             source_key=f"unavailable:{content_hash(reason)}",
             reason=reason,
         )
-        raise LearningUnavailableError(reason)
+        raise InvestigationEvidencePendingError(reason)
     evidence = result.get("evidence")
     if (
         not isinstance(evidence, dict)
@@ -242,31 +271,86 @@ async def _collect(service, job: dict) -> tuple[str, dict]:
         raise LearningOutputError("Observation provider omitted physical evidence or revision")
     occurred_at = result.get("occurred_at", "")
     if _epoch(occurred_at) < _epoch(inquiry["created_at"]):
-        raise LearningUnavailableError("Follow-up evidence predates the investigation")
+        raise InvestigationEvidencePendingError("Follow-up evidence predates the investigation")
     if not trigger_satisfied(inquiry["trigger"], evidence):
         service.transition_investigation(
             inquiry["id"],
-            "pending",
+            "pending" if inquiry.get("experience_id") else "blocked",
             source_key=f"trigger-pending:{result['source_key']}",
             reason="Requested observation condition has not occurred",
         )
-        raise LearningDeferredError("Investigation trigger has not occurred")
+        raise InvestigationEvidencePendingError("Investigation trigger has not occurred")
     previous = service.store.many(inquiry.get("latest_evidence_ids", []))
     if any(row.get("source_revision") == result["source_key"] for row in previous.values()):
-        raise LearningDeferredError("No new investigation evidence revision")
-    observation = service.record_observation(
-        inquiry["experience_id"],
-        {
-            "status": "partial",
-            "quality": result.get("quality", "direct"),
-            "evidence": evidence,
-            "occurred_at": occurred_at,
-            "held": None,
-            "investigation_id": inquiry["id"],
-            "source_revision": result["source_key"],
-        },
-        source_key=f"investigation:{inquiry['id']}:{result['source_key']}",
-    )
+        raise InvestigationEvidencePendingError("No new investigation evidence revision")
+    latest = service._owned(inquiry["id"], "investigation")
+    if latest["status"] not in {"open", "due", "pending", "blocked"}:
+        return "done", payload
+    if not inquiry.get("experience_id") and result.get("observation_id"):
+        try:
+            observation = service.validate_investigation_anchor(inquiry, result["observation_id"])
+        except LearningError as exc:
+            raise InvestigationEvidencePendingError(
+                "Observer has no valid newer investigation anchor"
+            ) from exc
+    else:
+        experience_id = inquiry.get("experience_id") or result.get("experience_id")
+        if not experience_id:
+            reason = "Fresh observer result has no original experience anchor"
+            service.transition_investigation(
+                inquiry["id"],
+                "blocked",
+                source_key=f"anchor-unavailable:{result['source_key']}",
+                reason=reason,
+            )
+            raise InvestigationEvidencePendingError(reason)
+        try:
+            parent = service._owned(experience_id, "experience")
+        except LearningError as exc:
+            raise LearningOutputError("Observer experience is not owned by this persona") from exc
+        if not is_learning_source(parent):
+            raise LearningOutputError("Investigation observer cannot bind generated experience")
+        if any(
+            domain != inquiry["domain"]
+            for domain in (
+                result.get("domain"),
+                evidence.get("domain"),
+                parent.get("metadata", {}).get("domain"),
+            )
+            if domain is not None
+        ):
+            raise LearningOutputError("Observer evidence belongs to a different domain")
+        observation = service.record_observation(
+            experience_id,
+            {
+                "status": "partial",
+                "quality": result.get("quality", "direct"),
+                "evidence": evidence,
+                "occurred_at": occurred_at,
+                "held": None,
+                "investigation_id": inquiry["id"],
+                "source_revision": result["source_key"],
+                "domain": inquiry["domain"],
+            },
+            source_key=f"investigation:{inquiry['id']}:{result['source_key']}",
+        )
+    if not inquiry.get("experience_id"):
+        try:
+            inquiry = service.transition_investigation(
+                inquiry["id"],
+                "due",
+                source_key=f"fresh-anchor:{observation['id']}",
+                reason="New observed evidence anchors this historical question",
+                evidence_ids=[observation["id"]],
+                experience_id=observation["experience_id"],
+            )
+        except LearningError as exc:
+            latest = service._owned(inquiry["id"], "investigation")
+            if latest["status"] not in {"open", "due", "pending", "blocked"}:
+                return "done", payload
+            raise InvestigationEvidencePendingError(
+                "Fresh source cannot yet anchor this historical question"
+            ) from exc
     cycle = function_hooks.emit_cognitive_event(
         "revisit",
         f"inquiry:{inquiry['id']}",
@@ -318,29 +402,138 @@ def _parse_output(text: str) -> dict:
         ) from exc
 
 
-def _bounded_source(record: dict) -> dict:
-    """Literal excerpts with omission receipts, never synthesized source claims."""
-    omissions = []
+def _bounded_source(record: dict, *, max_chars: int = 24000) -> dict:
+    """Finite adaptive literal extraction, including the manifest in its budget.
 
-    def excerpt(value, path=""):
-        if isinstance(value, str) and len(value) > 4000:
-            omissions.append({"path": path, "original_chars": len(value), "kept_chars": 4000})
-            return value[:4000]
-        if isinstance(value, list):
-            if len(value) > 24:
-                omissions.append({"path": path, "original_items": len(value), "kept_last": 24})
-            return [excerpt(item, f"{path}[{index}]") for index, item in enumerate(value[-24:])]
-        if isinstance(value, dict):
-            return {key: excerpt(item, f"{path}.{key}") for key, item in value.items()}
-        return value
+    Array paths use ORIGINAL indexes, and spans are Python character offsets.
+    Fields omitted at an ancestor are covered by that ancestor's kept-key list;
+    their contents are never represented as delivered or synthesized summaries.
+    """
+    if type(max_chars) is not int or not 512 <= max_chars <= 48000:
+        raise LearningError("invalid cognitive source excerpt budget")
+    original_hash = content_hash(record)
+    identity = {
+        "id",
+        "kind",
+        "source_id",
+        "source_ref",
+        "source_revision",
+        "revision",
+        "occurred_at",
+        "created_at",
+        "closed_at",
+        "timestamp",
+        "asset",
+        "venue",
+        "timeframe",
+        "domain",
+        "evidence",
+        "metrics",
+        "indicators",
+    }
 
-    result = excerpt(record)
-    if omissions:
-        result["input_excerpt_manifest"] = {
-            "original_record_hash": content_hash(record),
-            "literal_extract": True,
-            "omissions": omissions,
-        }
+    def pointer(path, key):
+        return path + "/" + str(key).replace("~", "~0").replace("/", "~1")
+
+    for attempt in range(12):
+        omissions = []
+        text_limit = max(16, 4000 >> attempt)
+        list_limit = max(1, 24 >> attempt)
+        field_limit = max(1, 64 >> attempt)
+        depth_limit = max(2, 8 - attempt // 2)
+
+        def excerpt(value, path="", depth=0):
+            if isinstance(value, str):
+                last_key = path.rsplit("/", 1)[-1].replace("~1", "/").replace("~0", "~")
+                string_limit = max(text_limit, 512) if last_key in identity else text_limit
+                if len(value) <= string_limit:
+                    return value
+                omissions.append(
+                    {
+                        "path": path,
+                        "original_chars": len(value),
+                        "kept_chars": string_limit,
+                        "start": 0,
+                        "end": string_limit,
+                    }
+                )
+                return value[:string_limit]
+            if isinstance(value, list):
+                kept = min(len(value), list_limit) if depth < depth_limit else 0
+                start = len(value) - kept
+                if start:
+                    omissions.append(
+                        {
+                            "path": path,
+                            "original_items": len(value),
+                            "kept_last": kept,
+                            "start": start,
+                            "end": len(value),
+                        }
+                    )
+                return [
+                    excerpt(value[index], pointer(path, index), depth + 1)
+                    for index in range(start, len(value))
+                ]
+            if isinstance(value, dict):
+                # Keep identity/time/indicator fields ahead of prose and large
+                # containers. A pathological field name is itself omitted.
+                keys = sorted(
+                    value,
+                    key=lambda key: (
+                        {"id": 0, "kind": 1, "evidence": 2, "metrics": 2, "indicators": 2}.get(
+                            key, 3
+                        ),
+                        key not in identity,
+                        not isinstance(value[key], (int, float, bool, type(None))),
+                        isinstance(value[key], (dict, list)),
+                        key,
+                    ),
+                )
+                limit = max(6, field_limit) if depth == 0 else field_limit
+                kept = (
+                    [key for key in keys if len(key) <= 128][:limit] if depth < depth_limit else []
+                )
+                if len(kept) != len(keys):
+                    omissions.append(
+                        {
+                            "path": path,
+                            "original_fields": len(keys),
+                            "kept_fields": kept,
+                            "omitted_fields": len(keys) - len(kept),
+                        }
+                    )
+                return {key: excerpt(value[key], pointer(path, key), depth + 1) for key in kept}
+            return value
+
+        result = excerpt(record)
+        if omissions:
+            result["input_excerpt_manifest"] = {
+                "original_record_hash": original_hash,
+                "literal_extract": True,
+                "path_format": "json_pointer_original_indexes",
+                "omissions": omissions,
+            }
+        if len(canonical_json(result)) <= max_chars:
+            return result
+    # Finite final fallback for unusually wide or deeply nested historical rows.
+    # The row remains inspectable by identity, but no omitted facts are claimed.
+    result = {key: record[key] for key in ("id", "kind") if key in record}
+    result["input_excerpt_manifest"] = {
+        "original_record_hash": original_hash,
+        "literal_extract": True,
+        "content_unavailable": True,
+        "omissions": [
+            {
+                "path": "",
+                "original_fields": len(record),
+                "kept_fields": list(result),
+                "reason": "source_budget",
+            }
+        ],
+    }
+    if len(canonical_json(result)) > max_chars:
+        raise LearningError("source identity exceeds its cognitive excerpt budget")
     return result
 
 
@@ -405,10 +598,14 @@ def _prompt(
         cycle["evidence_ids"], allow_superseded=cycle["phase"] == "revisit"
     )
     task = " ".join(str(row.get("task", row.get("evidence", ""))) for row in evidence)[:8000]
+    from .legacy_beliefs import legacy_understanding_current, sync_legacy_beliefs
+
+    sync_legacy_beliefs(service)
 
     identity = scheduled_payload.build_scheduled_cognition_payload(
         service.target.memory_dir,
         inference_state_file=service.target.state_dir / "self-model-inferences.json",
+        learning_service=service,
     )
     wm = regions.build_initial_working_memory(
         service.target.persona_id,
@@ -474,6 +671,7 @@ def _prompt(
             row
             for row in service.store.all("understanding")
             if row.get("status") == "needs_reassessment"
+            and legacy_understanding_current(row, service)
             and corrected_ids.intersection(
                 row.get("evidence_ids", []) + row.get("counterevidence_ids", [])
             )
@@ -493,6 +691,10 @@ def _prompt(
         "Use only supplied evidence IDs; previous understanding is context, not fresh evidence. "
         "Superseded observations explain history only: "
         "cite current evidence for new understanding. "
+        "When setting predecessor_id, preserve that supplied record's exact Type as "
+        "understanding_type. A different type requires a new record without predecessor_id. "
+        "Source excerpts explicitly identify omitted fields, character spans and array ranges. "
+        "Treat omitted content as unavailable, never as reviewed or absent. "
         "Return JSON {conclusion:string, understanding:[{understanding_type:"
         "concept|interpretation|belief|self_assessment|source_assessment, "
         "title:string,content:string,scope:string,uncertainty:string,evidence_ids:[string],"
@@ -522,23 +724,46 @@ def _prompt(
         "a future follow-up from a historical observation.\n"
     )
     # Bound whole source records rather than slicing JSON into invalid fragments.
-    source_rows = []
-    for row in evidence:
-        row = _bounded_source(row)
-        encoded = canonical_json(row)
-        if (
-            len(encoded) <= 24000
-            and sum(len(canonical_json(r)) for r in source_rows) + len(encoded) <= 48000
-        ):
-            source_rows.append(row)
-        else:
-            raise LearningOutputError(
-                "Evidence exceeds cognitive input budget; "
-                "source producer must provide a bounded extract"
-            )
+    source_rows, input_receipts = [], []
+    selected = evidence[:32]
+    per_record = min(24000, (48000 - 2 - max(0, len(selected) - 1)) // max(1, len(selected)))
+    for original in selected:
+        row = _bounded_source(original, max_chars=per_record)
+        source_rows.append(row)
+        input_receipts.append(
+            {
+                "record_id": original["id"],
+                "original_record_hash": content_hash(original),
+                "included": not row.get("input_excerpt_manifest", {}).get(
+                    "content_unavailable", False
+                ),
+                "excerpt_hash": content_hash(row),
+                "excerpt": row,
+                "excerpt_chars": len(canonical_json(row)),
+                "omissions": row.get("input_excerpt_manifest", {}).get("omissions", []),
+            }
+        )
+    input_receipts.extend(
+        {
+            "record_id": row["id"],
+            "original_record_hash": content_hash(row),
+            "included": False,
+            "reason": "total_source_budget",
+        }
+        for row in evidence[32:]
+    )
+    if context_provenance is not None:
+        context_provenance["source_inputs"] = input_receipts
     prompt = instructions + context.text + "\nACTUAL EVIDENCE:\n" + canonical_json(source_rows)
+    if len(evidence) > len(selected):
+        prompt += (
+            f"\n{len(evidence) - len(selected)} additional source records "
+            "were omitted by the input budget."
+        )
     if inquiry:
-        prompt += "\nORIGINAL INVESTIGATION:\n" + canonical_json(inquiry)
+        prompt += "\nORIGINAL INVESTIGATION:\n" + canonical_json(
+            _bounded_source(inquiry, max_chars=8000)
+        )
     return prompt, identity_text, context
 
 
@@ -677,7 +902,10 @@ async def _reason(service, cycle: dict) -> dict:
     output = _parse_output(result.text)
     # Invalid outputs can be repaired with another actual attempt; they never
     # create durable beliefs or pin retries to malformed output.
-    _validate_output(service, cycle, output)
+    included_ids = [
+        item["record_id"] for item in recall_provenance["source_inputs"] if item["included"]
+    ]
+    _validate_output(service, {**cycle, "evidence_ids": included_ids}, output)
     receipt = service.record_execution(
         experience["id"],
         {
@@ -690,6 +918,7 @@ async def _reason(service, cycle: dict) -> dict:
             "response_hash": content_hash(output),
             "cognitive_generated": True,
             "historical_recall": recall_provenance,
+            "source_inputs": recall_provenance["source_inputs"],
             "host_clock": host_clock,
             "image_inputs": getattr(result, "metadata", {}).get("image_inputs", []),
             "modality": "vision"
@@ -716,6 +945,7 @@ async def _reason(service, cycle: dict) -> dict:
         "context_hash": context.context_hash,
         "identity_hash": content_hash(identity),
         "historical_recall": recall_provenance,
+        "source_inputs": recall_provenance["source_inputs"],
         "host_clock": host_clock,
         "prompt_hash": content_hash(prompt),
         "version": COGNITIVE_VERSION,
@@ -864,7 +1094,9 @@ async def _support(service, cycle: dict) -> None:
         )
         if prior is None:
             refs = row["evidence_ids"] + row.get("counterevidence_ids", [])
-            actual = {r["id"]: r for r in service.evidence_records(refs)}
+            actual = {
+                r["id"]: r for r in service.cognitive_evidence_records(refs, allow_superseded=True)
+            }
             candidate = {
                 **row,
                 "candidate_type": "knowledge",
@@ -937,6 +1169,17 @@ async def process_cognitive_stage(service, job: dict) -> tuple[str, dict]:
         if not service.enabled():
             raise LearningDeferredError("Persona learning paused before retention")
         result_ids = await _retain(service, cycle, saved)
+        reasons = [cycle.get("metadata", {}).get("reason", "")] + [
+            item.get("reason", "") for item in cycle.get("trigger_provenance", [])
+        ]
+        if cycle["phase"] == "reflect" and any(
+            reason in {"session_end", "session_clear", "pre_compact", "talk_session_end"}
+            or reason.startswith(("session_", "compact"))
+            for reason in reasons
+        ):
+            from .synthesis_sources import project_completed_debrief
+
+            project_completed_debrief(service, cycle["id"], saved)
         return "cognitive_support", {**job["payload"], "result_ids": result_ids}
     finally:
         service.store.release_claim(cycle["id"], "reason", token)

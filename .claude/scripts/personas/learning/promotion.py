@@ -12,6 +12,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from personas.learning.authority import (
+    AutomaticAuthorization,
+    has_operator_directives,
+    original_evidence_records,
+    protected_context,
+    requires_qualification,
+)
 from personas.learning.evaluation import (
     EVALUATOR_VERSION,
     EvaluationReceipt,
@@ -31,6 +38,19 @@ def _bound_receipt(
         raise LearningError("candidate_not_found")
     if not allow_retired and candidate.get("status") in {"retired", "superseded"}:
         raise LearningError("candidate_retired")
+    if candidate.get("status") == "needs_reassessment":
+        raise LearningError("candidate_requires_reassessment")
+    for record_id in candidate.get("derived_input_ids", []):
+        derived = service.get_record(record_id)
+        if not derived or derived.get("status") in {
+            "superseded",
+            "needs_reassessment",
+            "contradicted",
+            "retired",
+            "rejected",
+            "cancelled",
+        }:
+            raise LearningError("candidate_derived_context_retired")
     if not evaluation or evaluation.get("kind") != "evaluation":
         raise LearningError("evaluation_not_found")
     if (
@@ -50,11 +70,15 @@ def _bound_receipt(
         or evaluation.get("passed") is not True
     ):
         raise LearningError("evaluation_authority_invalid")
-    behavioral = (
-        candidate["candidate_type"] == "procedure"
-        or candidate["changes_behavior"]
-        or receipt.support.get("changes_behavior") is not False
-    )
+    behavioral = requires_qualification(candidate, receipt.support)
+    protected = protected_context(service)
+    if receipt.protected_context_hash != canonical_hash(protected):
+        raise LearningError("operator_context_changed_since_evaluation")
+    if receipt.support.get("operator_instructions_preserved") is False or (
+        has_operator_directives(protected)
+        and receipt.support.get("operator_instructions_preserved") is not True
+    ):
+        raise LearningError("operator_instruction_conflict")
     if behavioral:
         if (
             receipt.mode != "qualification"
@@ -75,7 +99,11 @@ def _bound_receipt(
         or receipt.support.get("contradictions_addressed") is not True
     ):
         raise LearningError("candidate_evidence_unsupported")
-    records = service.evidence_records(list(receipt.evidence_hashes))
+    records = original_evidence_records(service, list(receipt.evidence_hashes))
+    if set(receipt.evidence_hashes) != set(
+        candidate.get("evidence_ids", []) + candidate.get("counterevidence_ids", [])
+    ):
+        raise LearningError("evaluation_evidence_binding_incomplete")
     current = {record["id"]: canonical_hash(_evidence_snapshot(record)) for record in records}
     if current != receipt.evidence_hashes:
         raise LearningError("evaluation_evidence_changed")
@@ -170,6 +198,9 @@ def _apply_amendment(
         max_content_chars=12000,
         allow_destructive=True,
         evidence_check=verify,
+        automatic_authorization=AutomaticAuthorization(
+            service, candidate["id"], evaluation["id"], proposal_id, restoring
+        ),
         source_target_allowlist={
             "harness_learning": frozenset({"MEMORY.md", "SELF.md", "SOUL.md"})
         },
@@ -391,6 +422,9 @@ def promote_candidate(service: Any, candidate_id: str, evaluation_id: str) -> di
                 if retired.get("status") != "rolled_back":
                     raise LearningError("prior_method_retirement_conflict")
                 retired_prior = prior
+            from personas.learning.authority import update_proposal_state
+
+            update_proposal_state(service, candidate_id, "applied", receipt_id=result["id"])
             return result
     except Exception:
         if application and previous is None:

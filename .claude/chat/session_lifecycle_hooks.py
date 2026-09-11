@@ -151,6 +151,9 @@ def write_clear_transcript(
                 },
                 "created_at": _iso(getattr(message, "created_at", None)),
                 "tool_calls": getattr(message, "tool_calls", []),
+                "source_message_id": getattr(message, "id", None),
+                "source_ref": getattr(message, "source_ref", None),
+                "source_revision": getattr(message, "source_revision", None),
             }
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -230,6 +233,7 @@ def clear_session_with_lifecycle(
     except Exception as exc:  # noqa: BLE001
         _record_failure(result, "persist_transcript", exc)
 
+    receipt: dict[str, Any] = {}
     # The retained transcript is the recovery source even if the model is down.
     try:
         import personas
@@ -254,6 +258,7 @@ def clear_session_with_lifecycle(
         "channel_id": channel_id,
         "thread_id": thread_id,
         "transcript_path": str(result.transcript_path or ""),
+        "learning_debrief_receipt": receipt,
     }
     _invoke_hook(result, "session-end-flush.py", payload, env=hook_env)
     _invoke_hook(result, "session-start-context.py", payload, env=hook_env)

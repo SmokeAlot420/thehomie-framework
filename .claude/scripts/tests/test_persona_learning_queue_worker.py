@@ -202,7 +202,10 @@ def test_real_worker_proposes_evaluates_promotes_without_reinforcing_practice(tm
     worker.discover_work(service)
     # New cognitive interpretation of real evidence is allowed; learner-generated
     # practice must not schedule another procedure-learning job.
-    assert all(j["kind"] == "cognition" for j in queue.LearningQueue(service).list())
+    assert all(
+        j["kind"] in {"cognition", "reflection", "dream", "tuning"}
+        for j in queue.LearningQueue(service).list()
+    )
 
 
 def test_observation_stage_persists_and_deduplicates_collection_timestamp(tmp_path, monkeypatch):
@@ -287,17 +290,19 @@ def test_actual_runtime_switch_queues_requalification_once(tmp_path):
     assert requal[0]["payload"]["target_runtime"]["model"] == "new-model"
 
 
-def test_completed_reflection_survives_learning_seam_failure(tmp_path, monkeypatch):
+def test_reflection_adapter_returns_shared_admission_without_inline_model(tmp_path, monkeypatch):
     import memory_reflect
     from contextlib import nullcontext
     async def reflection(*args):
-        return "existing reflection completed"
+        pytest.fail("legacy inline reflection must not run")
     async def unavailable(**kwargs):
         raise RuntimeError("learning package unavailable")
     monkeypatch.setattr(memory_reflect, "file_lock", lambda *args, **kw: nullcontext())
     monkeypatch.setattr(memory_reflect, "_run_reflection_inner", reflection)
     monkeypatch.setattr(worker, "wake_learning", unavailable)
-    assert asyncio.run(memory_reflect.run_reflection()) == "existing reflection completed"
+    receipt = json.loads(asyncio.run(memory_reflect.run_reflection()))
+    assert receipt["synthesis_kind"] == "reflection"
+    assert receipt["status"] == "no_signal"
 
 
 def test_existing_queue_inspection_is_read_only_and_validates_owner_and_job_keys(tmp_path):
@@ -349,10 +354,16 @@ def test_host_observed_paper_settlement_learns_but_generated_practice_does_not(t
     worker.discover_work(service)
     # New cognitive interpretation of real evidence is allowed; learner-generated
     # practice must not schedule another procedure-learning job.
-    assert all(j["kind"] == "cognition" for j in queue.LearningQueue(service).list())
+    assert all(
+        j["kind"] in {"cognition", "reflection", "dream", "tuning"}
+        for j in queue.LearningQueue(service).list()
+    )
     service.record_observation(paper["id"], {"status": "resolved", "quality": "direct",
         "evidence": {"call_id": "call-1", "simulated": True, "settlement": "market_closed"}}, source_key="market")
-    jobs = [j for j in queue.LearningQueue(service).list() if j["kind"] != "cognition"]
+    jobs = [
+        j for j in queue.LearningQueue(service).list()
+        if j["kind"] not in {"cognition", "reflection", "dream", "tuning"}
+    ]
     assert len(jobs) == 1 and jobs[0]["payload"]["experience_id"] == paper["id"]
     assert any(r["kind"] == "observation" for r in worker._evidence(service, paper["id"]))
     assert all(r.get("mode", "practice") == "practice" for r in worker._evidence(service, paper["id"]))
@@ -530,8 +541,9 @@ def test_corrected_outcome_retires_method_and_preserves_revision_lineage(tmp_pat
     before = queue.LearningQueue(service).list(include_finished=True)
     worker.discover_work(service)
     after = queue.LearningQueue(service).list(include_finished=True)
-    assert {j["id"] for j in before if j["kind"] != "cognition"} == {
-        j["id"] for j in after if j["kind"] != "cognition"}
+    background = {"cognition", "reflection", "dream", "tuning"}
+    assert {j["id"] for j in before if j["kind"] not in background} == {
+        j["id"] for j in after if j["kind"] not in background}
     cognitive_count = len([j for j in after if j["kind"] == "cognition"])
     worker.discover_work(service)
     assert len([j for j in queue.LearningQueue(service).list(include_finished=True)

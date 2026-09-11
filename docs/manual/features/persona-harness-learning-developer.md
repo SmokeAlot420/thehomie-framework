@@ -6,6 +6,78 @@ This guide covers framework integration; see the
 
 ## Lifecycle And Ownership
 
+### Unified Synthesis And Tuning Interfaces
+
+`personas.learning.synthesis.request_synthesis(service, kind, *, source_key,
+now=None, force=False, test_mode=False)` admits `reflection` or `dream` to the
+existing queue. The shared service remains the identity and eligibility owner.
+`synthesis_status(service)` reads persisted progress without collecting sources.
+`synthesis_sources.collect_sources(service, kind, *, now=None)` is a host-owned
+collector; callers must not replace it with model-generated evidence.
+
+The collector contract is `{ref, revision, kind, text, evidence_ids, source_time,
+start, end, complete, metadata}`. `ref` and `revision` identify a physical source
+version; `[start, end)` identifies the supplied character range. The frozen
+`synthesis_cycle.input_manifest` is exact; `omitted_manifest` retains excluded
+ranges without pretending the model saw them. Root observations stay in
+`evidence_ids`; generated understanding and investigation inputs stay in
+`derived_input_ids`. Changed windows must not mint new independent evidence for
+the same underlying source. Unknown historical evidence counts remain unknown.
+
+Queue checkpoints are `synthesis_reason`, `synthesis_retain`, `synthesis_support`,
+and `synthesis_project`. A `synthesis_reasoning` event preserves completed inference
+and execution identity; `synthesis_consumed` records exact successfully retained
+inputs; `synthesis_projected` proves the legacy artifact callback completed.
+Retry retention/projection against the saved inference. Never mark an entire
+scanned episode consumed because only its bounded excerpt reached the model.
+Automatic behavior proposals use the shared change authority and existing
+physical promotion/rollback owners. Retained ideas cannot authorize an amendment.
+
+`evolve.tuning.tune(service, now=None)` is asynchronous queue admission;
+`tuning_status(service)` and `rollback_policy(service, reason=...)` are synchronous.
+Validated inputs are admitted through `import_validated_cases(service, cases,
+source_key=...)`. Tuning uses distinct `tuning_case`, `tuning_corpus`, `tuning_run`,
+`tuning_evaluation`, and `tuning_policy` records. Do not store retrieval evaluations
+as method qualifications or change generic config during a concurrent recall.
+Policy activation is a `tuning_activation` event on its policy record, not a
+method activation or a separate record kind.
+Policy application remains scoped to the request's persona and honors explicit
+operator overrides.
+
+Import prepared labels with `thehomie evolve tune --persona <id> --cases
+<cases.json> --source-key <stable-import-id> --json`. The JSON is an array; each
+case follows the host-validated contract below. Paths are relative to that
+persona's vault; SHA-256 hashes and excerpts must match physical source bytes.
+The current ranking is never a source of ground-truth labels.
+
+| Case field | Contract |
+|---|---|
+| `case_key`, `query`, `source_family` | Stable case identity, recall request, and grouping for leakage prevention |
+| `source` | `{path, sha256, excerpt}` for the originating evidence |
+| `labels` | Array of `{evidence: {path, sha256, excerpt}, relevance, rationale}`; relevance is 0 through 3 |
+| `validation` | `{method: "operator", actor, at, independent_of_retrieval_scores: true}`; `at` is an ISO timestamp with timezone |
+| `request_budget` | `{max_results, context_chars, search_mode}`; 1–20 results, 100–100000 characters, mode `auto`, `hybrid`, or `keyword` |
+| `protected`, `forbidden_paths` | Protected-case flag and vault-relative exclusion paths |
+
+Source-family SHA-256 modulo four fixes the held-out assignment. Readiness
+requires at least 60 validated cases, including 30 development and 12 held-out
+cases. A validated-case count alone is insufficient when source families cannot
+produce a valid split. Corpus/run/evaluation/policy links preserve the frozen
+case set, candidate choice, paired confidence bound, latency, and rollback chain.
+
+Operator contracts are additive: summary includes `lifecycle` and `tuning`;
+GET `/learning/lifecycle` and `/learning/tuning` inspect them. Explicit POST
+`/learning/tuning/run` admits work; POST `/learning/tuning/rollback` delegates to
+the policy owner. All paths keep dashboard authentication, physical profile
+checks, persona scope, error status, and secret/path redaction. Hono translates
+only through its canonical persona mapper and never opens the learning database.
+The UI never infers actual model usage from a completed cycle: `context_only`
+reorientation and concrete execution receipts are shown separately.
+
+The new contracts require isolated source/retry, provenance, authority,
+tuning-adoption/rollback, API, and UI verification. A passing suite establishes
+local behavior; live provider, deployment, and release proof are separate.
+
 The Python harness owns persistent learning. A surface captures what crossed its
 host boundary; a domain producer supplies evidence of what happened afterward.
 Provider-specific hooks may adapt these boundaries, but must not own a separate
@@ -189,6 +261,39 @@ recovery wakes for the same durable queue. Typed pause, contention, lease,
 timeout, and provider failures defer work without converting them into failed
 learning. The worker checkpoint remains the restart boundary.
 
+### Durable Session Debriefs And Physical Message Identity
+
+The session-end hook first publishes an immutable, redacted replay envelope in
+the persona's `state/learning-lifecycle-outbox/`, before it accesses the learning
+SQLite stores. Version 3 preserves the full accepted canonical transcript and
+its identity hash; it no longer silently trims a long session to the old 16000
+character prefix. The envelope limit is 8000000 characters. Oversized or invalid
+input fails validation rather than being acknowledged as fully retained.
+
+Normal learner discovery replays pending envelopes after a restart or temporary
+database failure. Long transcripts become contiguous observations of at most
+3500 characters with `[start, end)`, transcript hash, and total source length.
+Reflection cycles receive at most four excerpts per batch. All excerpts and
+their cycle references become durable before the outbox entry is acknowledged.
+The saved binding receipt includes `observation_ids`, `cognitive_cycle_ids`,
+`source_chars`, and `source_fully_retained`. This means source retention and
+queue admission, not completed inference or an observed domain outcome. Stable
+source keys coalesce replay after a partial failure. Older v1/v2 envelopes remain
+readable; an older truncated source does not gain an invented missing tail.
+
+Both SQLite and PostgreSQL session stores preserve nullable
+`chat_messages.source_origin_ref` alongside each physical message ID. New engine
+writes bind the original host turn and role as `chat-message:<origin>:<role>`;
+approval resumes keep the same origin. `ChatMessage.source_ref` returns that
+persisted origin when available and otherwise falls back to
+`chat-message:<session_id>:<physical_message_id>` for older rows. A missing
+physical identity remains unknown. `source_revision` hashes the literal role
+and content, independently of collection windows or read time. Transcript export
+and excerpt provenance carry these same references and revisions, so repeated
+windows cannot manufacture independent observations of the same message.
+
+### Queue Progress And Reports
+
 Queue policy distinguishes due reassessment, current cognition, and historical
 recovery. Within a priority class, `available_at` orders ready jobs before
 creation time: an old unavailable provider request cannot retake every wake and
@@ -311,6 +416,18 @@ a method, preparing a request, or starting a failed attempt cannot prove its use
 The normal runtime callback records submission, and completion records execution
 with `RuntimeResult.model` and `.provider`. Hosts that need an earlier prepared
 receipt can call `record_context_receipt(..., phase="prepared")` explicitly.
+
+Foreground reorientation selects retained context once before the cognitive
+pass, then passes that same bundle into turn preparation. Its `cognitive_cycle`
+stores `input_versions`, `context_hash`, and `context_delivery`. A context-only
+assembly is `execution_kind="context_only"`, `context_delivery="prepared"`, with
+zero model calls. Actual foreground reasoning requires a successful runtime
+receipt with concrete model/provider and an output hash. Even that reasoning
+receipt marks the selected bundle `executed` only when its
+`retained_context_hash` matches the exact selected context hash. Otherwise the
+bundle remains `prepared`. Final-response context delivery is recorded separately
+by the ordinary submitted/executed runtime receipts. Neither preparation nor a
+completed cycle alone establishes that a model received a retained version.
 
 ### Runnable surface smoke
 
@@ -505,6 +622,19 @@ cron or inline evaluator to a foreground turn.
 The worker checkpoints stages, shares an install-wide lease, and yields to
 foreground activity. Provider infrastructure failures defer work; semantic
 failures retain bounded retries. Keep these states visible in operator history.
+
+For a specific operator check, run `persona_learning_worker.py -p <persona>
+--job-id <existing-job-id> --max-stages 8`. This advances only that existing
+eligible job through the same worker, leases, stage checks, and evaluation.
+It does not admit new work, change priority, or bypass backoff, pause, or
+foreground controls. Ordinary wakes retain their normal queue ordering.
+
+Current understanding leads imported historical material in synthesis selection;
+unconsumed older ranges remain eligible. Cognitive source extraction adapts to
+the existing input budget and records exact JSON-pointer omissions. Declared
+concise synthesis fields are validated before retention; unrequested model
+commentary is discarded rather than stored as private deliberation or allowed
+to block an otherwise valid result.
 
 The worker proposes conditional candidates and freezes actual before/after
 context bundles, evidence revisions, and separate qualification cases.

@@ -411,6 +411,7 @@ class LearningService:
         )
         return self._owned(activation_id)
 
+    @_atomic
     def set_status(
         self,
         record_id: str,
@@ -420,7 +421,7 @@ class LearningService:
         key: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self._owned(record_id)
+        current = self._owned(record_id)
         self.store.event(
             record_id,
             "status",
@@ -431,6 +432,90 @@ class LearningService:
             },
             key=key or str(uuid.uuid4()),
         )
+        if status in {
+            "superseded",
+            "invalidated",
+            "contradicted",
+            "rejected",
+            "needs_reassessment",
+            "cancelled",
+        }:
+            # Derived context carries dependency, never an extra observation.
+            # Retiring its identity retires dependent conclusions transitively.
+            affected, frontier = {record_id}, [record_id]
+            descendants = [
+                row
+                for kind in ("understanding", "investigation", "candidate")
+                for row in self.store.all(kind)
+            ]
+            while frontier:
+                parent = frontier.pop()
+                for row in descendants:
+                    if (
+                        row["id"] in affected
+                        or row.get("explicit_operator_authority")
+                        or row.get("predecessor_id") == parent
+                        or parent not in row.get("derived_input_ids", [])
+                    ):
+                        continue
+                    affected.add(row["id"])
+                    frontier.append(row["id"])
+                    if row.get("status") in {"superseded", "rolled_back", "rejected", "cancelled"}:
+                        continue
+                    self.store.event(
+                        row["id"],
+                        "status",
+                        {
+                            "status": "needs_reassessment",
+                            "reason": "Derived source was retired",
+                            "metadata": {"invalidated_input_id": parent},
+                        },
+                        key=f"derived-retired:{record_id}:{status}",
+                    )
+            invalid_candidates = {
+                row["id"]
+                for row in descendants
+                if row["id"] in affected and row["kind"] == "candidate"
+            }
+            if current["kind"] == "candidate":
+                invalid_candidates.add(current["id"])
+            if invalid_candidates:
+                from .queue import enqueue
+
+                correction = None
+                if key and key.startswith(("superseded:", "corrected:")):
+                    referenced = self.store.get(key.split(":", 1)[1])
+                    if (
+                        referenced
+                        and referenced["kind"] == "observation"
+                        and referenced.get("supersedes")
+                    ):
+                        correction = referenced
+                for activation in self.store.all("activation"):
+                    if activation.get("candidate_id") not in invalid_candidates or activation.get(
+                        "status"
+                    ) not in {"active_provisional", "active_supported"}:
+                        continue
+                    regression_key = f"derived-retired:{activation['id']}:{record_id}"
+                    regression_payload = {
+                        "candidate_id": activation["candidate_id"],
+                        "activation_id": activation["id"],
+                        "invalidated_input_id": record_id,
+                    }
+                    if correction:
+                        # Share the existing observation-owner identity: one
+                        # correction must not schedule two competing rollbacks.
+                        regression_key = f"{activation['id']}:{correction['id']}"
+                        regression_payload.update(
+                            experience_id=correction["experience_id"],
+                            observation_id=correction["id"],
+                        )
+                    enqueue(
+                        self,
+                        "regression",
+                        source_key=regression_key,
+                        payload=regression_payload,
+                    )
         return self._owned(record_id)
 
     def _active_methods(self, task: str | None = None) -> list[dict[str, Any]]:
@@ -529,6 +614,72 @@ class LearningService:
         methods = self._context_methods(task, max_chars=max_chars)
         return compile_context(task, methods, max_chars=max_chars)
 
+    @_atomic
+    def record_reorientation(
+        self,
+        experience_id: str,
+        origin_key: str,
+        receipt: dict | None = None,
+        *,
+        context: LearningContext | None = None,
+    ) -> dict[str, Any]:
+        """Record the foreground pass, without queuing a duplicate model call."""
+        from .queue import is_learning_source
+
+        self._require_enabled()
+        experience = self._owned(experience_id, "experience")
+        if not is_learning_source(experience):
+            raise LearningError("reorientation requires an original experience")
+        allowed = {
+            "success",
+            "model",
+            "provider",
+            "runtime_lane",
+            "response_hash",
+            "output_hash",
+            "context_hash",
+            "session_id",
+            "execution_time_ms",
+            "prompt_hash",
+            "retained_context_hash",
+        }
+        supplied = _safe(dict(receipt or {}))
+        if set(supplied) - allowed:
+            raise LearningError("foreground receipt accepts runtime identity and hashes only")
+        if supplied.get("output_hash") and not supplied.get("response_hash"):
+            supplied["response_hash"] = supplied.pop("output_hash")
+        actual = supplied.get("success") is True and all(
+            isinstance(supplied.get(key), str) and supplied[key].strip()
+            for key in ("model", "provider", "response_hash")
+        )
+        if set(supplied) - {"context_hash"} and not actual:
+            raise LearningError(
+                "foreground inference receipt requires verified completion metadata"
+            )
+        values = {
+            "phase": "reorient",
+            "origin_key": _text(origin_key, "origin_key", maximum=1024),
+            "experience_id": experience_id,
+            "evidence_ids": [experience_id],
+            "status": "completed",
+            "execution_kind": "reasoning" if actual else "context_only",
+            "foreground_receipt": supplied,
+            "model_call_count": int(actual),
+            "metadata": {"foreground": True},
+            "context_delivery": "executed"
+            if actual
+            and context is not None
+            and supplied.get("retained_context_hash") == context.context_hash
+            else "prepared",
+            "input_versions": list(context.versions) if context is not None else [],
+            "context_hash": context.context_hash
+            if context is not None
+            else supplied.get("context_hash"),
+        }
+        return self.store.put(
+            "cognitive_cycle", values, key=f"foreground:{experience_id}:{origin_key}"
+        )
+
     def enqueue_cognitive_cycle(
         self,
         phase: str,
@@ -610,19 +761,33 @@ class LearningService:
             data[field] = _text(data.get(field), field, maximum=8000)
         for field in ("evidence_ids", "counterevidence_ids"):
             data.setdefault(field, [])
-            self.evidence_records(data[field])
-        if not data["evidence_ids"]:
+            self.cognitive_evidence_records(
+                data[field], allow_superseded=field == "counterevidence_ids"
+            )
+        if not data["evidence_ids"] and not self._derived_source_manifest(data):
             raise LearningError("understanding must identify its originating evidence")
         if data.get("status", "tentative") != "tentative":
             raise LearningError("source support must be established by the support evaluator")
         data["status"] = "tentative"
         if data.get("cycle_id"):
-            self._owned(data["cycle_id"], "cognitive_cycle")
+            cycle = self._owned(data["cycle_id"])
+            if cycle["kind"] not in {"cognitive_cycle", "synthesis_cycle"}:
+                raise LearningError("understanding requires a cognitive or synthesis cycle")
+        for ref in data.get("derived_input_ids", []):
+            if self._owned(ref)["kind"] not in {"understanding", "investigation"}:
+                raise LearningError("derived inputs must be retained context")
         predecessor = data.get("predecessor_id")
         if predecessor:
             old = self._owned(predecessor, "understanding")
             if old["understanding_type"] != data["understanding_type"]:
                 raise LearningError("understanding revision must preserve its type")
+            if old.get("explicit_operator_authority") and not (
+                data.get("origin") == "legacy_import"
+                and data.get("legacy_id") == old.get("legacy_id")
+            ):
+                raise LearningError(
+                    "automatic understanding cannot supersede an explicit operator instruction"
+                )
         data.pop("content_hash", None)
         data["content_hash"] = content_hash(data)
         record = self.store.put("understanding", data, key=source_key)
@@ -635,6 +800,34 @@ class LearningService:
             )
         return record
 
+    def _derived_source_manifest(self, data: dict[str, Any]) -> bool:
+        """Legacy text is traceable context, never a fabricated observation count."""
+        if data.get("origin") not in {"legacy_import", "synthesis"}:
+            return False
+        manifest = data.get("source_manifest")
+        if not isinstance(manifest, list) or not manifest:
+            return False
+        for source in manifest:
+            if not isinstance(source, dict) or any(
+                not isinstance(source.get(field), str) or not source[field]
+                for field in ("ref", "revision", "kind", "text")
+            ):
+                raise LearningError("derived understanding requires an exact source manifest")
+            start, end = source.get("start"), source.get("end")
+            if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+                raise LearningError("derived source ranges must be exact character offsets")
+            if end - start != len(source["text"]):
+                raise LearningError("derived source range does not match its excerpt")
+        historical_count = data.get("historical_evidence_count")
+        if historical_count is not None and not (
+            data.get("origin") == "legacy_import"
+            and type(historical_count) is int
+            and historical_count == 0
+        ):
+            raise LearningError("unknown legacy evidence counts must remain unknown")
+        data.setdefault("historical_evidence_count", None)
+        return True
+
     def open_investigation(self, payload: dict[str, Any], *, source_key: str) -> dict[str, Any]:
         from .models import validate_investigation_trigger
 
@@ -645,10 +838,12 @@ class LearningService:
         data["trigger"] = validate_investigation_trigger(data.get("trigger"))
         data.setdefault("evidence_ids", [])
         evidence = self.evidence_records(data["evidence_ids"])
-        if not evidence:
+        derived_only = not evidence and self._derived_source_manifest(data)
+        if not evidence and not derived_only:
             raise LearningError("investigation requires originating evidence")
         if data.get("cycle_id"):
-            self._owned(data["cycle_id"], "cognitive_cycle")
+            if self._owned(data["cycle_id"])["kind"] not in {"cognitive_cycle", "synthesis_cycle"}:
+                raise LearningError("investigation requires a cognitive or synthesis cycle")
         experience_id = data.get("experience_id") or next(
             (
                 item.get("experience_id") or (item["id"] if item["kind"] == "experience" else None)
@@ -656,12 +851,16 @@ class LearningService:
             ),
             None,
         )
-        self._owned(experience_id, "experience")
-        data.update(experience_id=experience_id, status="open")
+        if not derived_only:
+            self._owned(experience_id, "experience")
+        data.update(experience_id=experience_id, status="blocked" if derived_only else "open")
+        if derived_only:
+            data["status_reason"] = "Historical question awaits original observed evidence"
         data.pop("content_hash", None)
         data["content_hash"] = content_hash(data)
         record = self.store.put("investigation", data, key=source_key)
-        self._notify(record)
+        if not derived_only:
+            self._notify(record)
         return record
 
     @_atomic
@@ -675,12 +874,15 @@ class LearningService:
         conclusion: str = "",
         evidence_ids: list[str] | None = None,
         next_check_at: str | None = None,
+        experience_id: str | None = None,
     ) -> dict[str, Any]:
         record = self._owned(investigation_id, "investigation")
         if status not in {"open", "due", "pending", "blocked", "completed", "cancelled"}:
             raise LearningError("invalid investigation status")
         if record["status"] in {"completed", "cancelled"} and status != record["status"]:
             raise LearningError("a closed investigation requires a new investigation")
+        if record["status"] not in {"open", "due", "pending", "blocked", "completed", "cancelled"}:
+            raise LearningError("a retired investigation requires refreshed context")
         data = {
             "status": status,
             "reason": str(reason)[:4000],
@@ -689,10 +891,60 @@ class LearningService:
         if evidence_ids is not None:
             self.cognitive_evidence_records(evidence_ids, allow_superseded=True)
             data["latest_evidence_ids"] = list(dict.fromkeys(evidence_ids))
+        if experience_id is not None:
+            if record.get("experience_id") not in {None, experience_id}:
+                raise LearningError("investigation is already anchored to a different experience")
+            if not evidence_ids:
+                raise LearningError("investigation anchor requires a newer original observation")
+            for ref in evidence_ids:
+                self.validate_investigation_anchor(record, ref, experience_id=experience_id)
+            data["experience_id"] = experience_id
+            data["anchor_evidence_ids"] = list(dict.fromkeys(evidence_ids))
+            # Deliberately preserve original evidence_ids/source_manifest and
+            # historical_evidence_count: fresh support does not rewrite history.
         if next_check_at:
             data["next_check_at"] = _instant(next_check_at, "next_check_at").isoformat()
         self.store.event(investigation_id, "investigation_transition", data, key=source_key)
         return self._owned(investigation_id)
+
+    def validate_investigation_anchor(
+        self, investigation: dict, observation_id: str, *, experience_id: str | None = None
+    ) -> dict:
+        """Validate a real, newer and relevant root without creating any evidence."""
+        from .cognition import trigger_satisfied
+        from .queue import is_learning_source
+
+        observation = self._owned(observation_id, "observation")
+        parent = self._owned(observation.get("experience_id", ""), "experience")
+        evidence = observation.get("evidence")
+        if (
+            not is_learning_source(parent)
+            or observation.get("quality") not in {"direct", "proxy"}
+            or observation.get("status") not in {"partial", "resolved"}
+            or not isinstance(evidence, dict)
+            or (experience_id is not None and parent["id"] != experience_id)
+            or _instant(
+                observation.get("occurred_at", observation["created_at"]), "observation time"
+            )
+            <= _instant(investigation["created_at"], "investigation time")
+        ):
+            raise LearningError("investigation anchor must be a newer original observation")
+        domains = [
+            domain
+            for domain in (
+                observation.get("domain"),
+                evidence.get("domain"),
+                parent.get("metadata", {}).get("domain"),
+            )
+            if domain is not None
+        ]
+        if any(domain != investigation["domain"] for domain in domains) or (
+            investigation["trigger"]["type"] == "deadline" and not domains
+        ):
+            raise LearningError("investigation anchor belongs to a different or unknown domain")
+        if not trigger_satisfied(investigation["trigger"], evidence):
+            raise LearningError("investigation anchor does not match its source trigger")
+        return observation
 
     def render_cognitive_context(
         self,
@@ -702,6 +954,7 @@ class LearningService:
         model: str | None = None,
     ) -> LearningContext:
         from .context import compile_cognitive_context
+        from .legacy_beliefs import legacy_understanding_current
 
         if not self.enabled() or max_chars <= 0:
             return LearningContext()
@@ -709,11 +962,12 @@ class LearningService:
             r
             for r in self.store.all("understanding")
             if r.get("status") in {"tentative", "supported"}
+            and legacy_understanding_current(r, self)
         ]
         investigations = [
             r
             for r in self.store.all("investigation")
-            if r.get("status") not in {"completed", "cancelled"}
+            if r.get("status") in {"open", "due", "pending", "blocked"}
         ]
         valid = []
         evidence = self.store.many(
@@ -728,7 +982,7 @@ class LearningService:
         for row in understanding:
             if all(
                 evidence.get(ref, {}).get("status") != "superseded" and ref in evidence
-                for ref in row.get("evidence_ids", []) + row.get("counterevidence_ids", [])
+                for ref in row.get("evidence_ids", [])
             ):
                 valid.append(row)
         methods = self.render_context(task, max_chars=min(2000, max_chars // 2), model=model)

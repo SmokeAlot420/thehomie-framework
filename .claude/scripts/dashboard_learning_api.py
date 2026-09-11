@@ -97,6 +97,27 @@ def learning_records(
     )
 
 
+@router.get("/api/agents/{persona_id}/learning/lifecycle")
+def learning_lifecycle(persona_id: str, request: Request) -> dict:
+    return _call(lambda: _operator(persona_id, request).lifecycle())
+
+
+@router.get("/api/agents/{persona_id}/learning/tuning")
+def learning_tuning_status(persona_id: str, request: Request) -> dict:
+    return _call(lambda: _operator(persona_id, request).tuning_status())
+
+
+@router.post("/api/agents/{persona_id}/learning/tuning/run")
+def run_learning_tuning(persona_id: str, request: Request) -> dict:
+    # Explicit mutation, with corpus validation and adoption policy owned by Python.
+    return _call(lambda: asyncio.run(_operator(persona_id, request).run_tuning()))
+
+
+@router.post("/api/agents/{persona_id}/learning/tuning/rollback")
+def rollback_learning_tuning(persona_id: str, request: Request) -> dict:
+    return _call(lambda: _operator(persona_id, request).rollback_tuning())
+
+
 @router.get("/api/agents/{persona_id}/learning/records/{record_id}")
 def learning_record(persona_id: str, record_id: str, request: Request) -> dict:
     return _call(lambda: _operator(persona_id, request).get_record(record_id))

@@ -13,6 +13,36 @@ context. They are not public release tags unless a matching public tag exists.
 
 ---
 
+## TaskChad OS v1.10.0 — Unified Persona Learning
+
+**Release Date:** September 10, 2026
+
+Reflection, dreaming, and evolution share the persona learning journal, queue,
+source identities, and evaluation policy across configured runtimes.
+
+### Highlights
+
+- Dreaming consumes retained understanding, investigations, counterevidence,
+  episodes, and original observations. Exact excerpt receipts leave omitted
+  material eligible for a later pass and skip unchanged inputs.
+- Foreground cognition receives retained context before thinking and reuses its
+  actual runtime receipt. Session completion, compaction, and clearing share a
+  durable debrief; long transcripts retain every source portion across retries.
+- Physical message identities survive both session backends. Repeated summaries
+  and edited revisions cannot inflate independent evidence counts.
+- Automatic lasting changes use bound evaluation receipts. Tentative conclusions
+  remain available; behavioral changes require separate qualification, respect
+  operator directives, and retain existing rollback owners.
+- Evolve can qualify per-persona retrieval weights and score floors against
+  validated relevance cases, with a held-out family split, uncertainty and
+  regression checks, versioned activation, and automatic rollback. Insufficient
+  evidence produces an explicit no-change result.
+- The Learning view, API, and CLI expose stage inputs, consumers, actual model
+  calls, skips, deferrals, tuning readiness, and retained context delivery.
+
+Mem0 remains a future comparison against this baseline. The framework owns the
+lifecycle; it does not depend on a particular model or Claude hook implementation.
+
 ## TaskChad OS v1.9.0 — Continuous Persona Cognition
 
 **Release Date:** September 10, 2026

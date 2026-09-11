@@ -24,7 +24,17 @@ def service(tmp_path, monkeypatch):
     return LearningService(target)
 
 
-def candidate(service, *, kind="procedure", changes_behavior=True, content="Ask a diagnostic question before discussing a discount.", prior_candidate_id=None, baseline_version="initial"):
+def candidate(
+    service, *, kind="procedure", changes_behavior=True, content=None,
+    prior_candidate_id=None, baseline_version="initial",
+):
+    # Descriptive fixtures must not smuggle standing instructions through the
+    # support-only path; behavioral text is qualified regardless of its label.
+    if content is None:
+        content = (
+            "Ask a diagnostic question before discussing a discount." if changes_behavior
+            else "The prospect explained their needs after a diagnostic question."
+        )
     experience = service.capture_experience("sales-1", "test", "Handle a price objection")
     observation = service.record_observation(experience["id"], {
         "evidence": "Prospect explained their needs after a diagnostic question.",
@@ -332,7 +342,7 @@ async def test_corrected_evidence_invalidates_old_adoption_authority(service):
     old = service.get_record(c["evidence_ids"][0])
     service.record_observation(old["experience_id"], {"evidence": "Reply belonged to a different prospect.",
         "quality": "direct", "status": "resolved", "supersedes": old["id"]}, source_key="correction")
-    with pytest.raises(LearningError, match="superseded"):
+    with pytest.raises(LearningError, match="superseded|requires_reassessment"):
         promote_candidate(service, c["id"], result["id"])
 
 

@@ -27,6 +27,9 @@ class FakeService:
     def record_context_receipt(self, *a, **kw):
         self.calls.append(('context', a, kw))
 
+    def record_reorientation(self, *a, **kw):
+        return {'id': 'reorient-1', 'execution_kind': 'context_only', 'model_call_count': 0}
+
     def commit_expectation(self, *a, **kw):
         self.calls.append(('expectation', a, kw))
         return {'id': 'expect-1'}

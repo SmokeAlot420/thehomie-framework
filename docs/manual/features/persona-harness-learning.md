@@ -26,6 +26,71 @@ This chapter covers daily operation. Use the
 surface or domain, and [Universal Persona Cognition](universal-persona-cognition.md)
 for the wider memory, reflection, and dream system.
 
+## Unified Reflection, Dreaming, And Recall Tuning
+
+The unified implementation uses the existing persona journal and queue for
+reflection, dream consolidation, method qualification, and retrieval tuning.
+Inspect the running installation's version before expecting these additive
+surfaces; this contract is not a claim of deployment or provider success.
+
+```sh
+thehomie profile learning lifecycle default --json
+thehomie profile learning history default --kind synthesis_cycle --json
+thehomie profile learning history default --kind synthesis_request --json
+thehomie evolve status --persona default --json
+thehomie evolve tune --persona default --json
+thehomie evolve rollback --persona default --json
+```
+
+The Learning tab shows each synthesis admission, deferred queue stage, input
+source revision and character range, output IDs, and recorded model calls.
+`context_only` reorientation means context assembly, not a thinking call.
+Completed stages do not establish model usage without an execution receipt.
+Pending consumers cover admitted cycles; viewing the page does not scan source
+files, call a model, or create missing profile state.
+
+Reflection and dreams use changed understanding, unfinished questions,
+counterevidence, episodes, and original observations. Generated conclusions are
+derived context, not additional independent observations. Consumption advances
+only after successful retention of the exact source revision and excerpt.
+Partial and omitted episode portions remain eligible. An inference completed
+before an interruption is reused by the next retention attempt.
+
+Session-end capture has a durable v3 outbox. It retains the accepted redacted
+source before relying on the learning database, then replays bounded excerpt
+batches after a restart or outage. A `source_fully_retained` receipt proves the
+source excerpts and queued cycles exist; it does not claim the cycles finished.
+Long sessions are not considered consumed merely because a prefix was reviewed.
+Message-origin references survive both supported session backends, keeping the
+same message from becoming new independent proof in another collection window.
+
+For foreground work, inspect `context_delivery` and the actual runtime receipt:
+selected context starts `prepared`; verified reasoning with the matching retained
+context hash can establish `executed` inclusion. The final response has its own
+execution receipt. Context-only reorientation never increases model-call counts.
+
+Recall tuning has separate case, corpus, run, evaluation, and policy records.
+It requires at least 60 validated relevance cases, split by source family into
+at least 30 development and 12 held-out cases. Unlabeled diagnostic goldens do not qualify.
+The worker selects at most six deterministic neighbors on development data and
+evaluates the chosen winner once on held-out data with the same context budget.
+Adoption requires a positive paired 95% relevance-gain bound, no added errors or
+protected/isolation regressions, and candidate p95 latency at most 1.25 times
+baseline. No eligible improvement is a valid no-change result. Batches are
+limited to one per persona per day with new validated material.
+Frozen regression checks monitor accepted policies and restore the recorded
+predecessor when their gates fail; inspect the policy history for that receipt.
+
+Use **Request tuning run** for explicit queue admission and **Roll back recall
+policy** to restore a predecessor policy after confirmation. Both share Python
+controls with the CLI. Ordinary reads remain GET-only. Explicit operator recall
+settings take precedence over learned policy. Tuning never changes models,
+permissions, persona scope, embedding models, backends, or context budgets.
+
+Observations, understanding changes, method qualification, and recall tuning
+remain separate report counts. A policy activation is not a learned idea or an
+adopted method. Neither a held-out win nor context inclusion proves live benefit.
+
 ## What Each Homie Can Learn
 
 The main Homie and specialists share the same lifecycle. Their identity, actual
@@ -255,15 +320,15 @@ the reported conflict rather than overwriting files manually.
 | Valid default/named profile with no `learning` block or no `enabled` key | Harness enabled by default |
 | Explicit `learning.enabled: false` | Harness disabled; resume does not override it |
 | Malformed learning configuration | Error; it is not treated as permission to enable learning |
-| Pause | Suspends the harness while preserving history and applied content |
+| Pause | Suspends shared cognition, synthesis, qualification, and tuning admission/work while preserving history and applied content |
 | Resume | Clears pause; explicit configuration or environment disables still apply |
 | `PERSONA_LEARNING_ENABLED=false` | Disables the harness and the existing reflection tick; other producers retain their documented controls |
-| `HOMIE_KILLSWITCH_HARNESS_LEARNING=disabled` | Disables this harness without changing the legacy reflection setting |
+| `HOMIE_KILLSWITCH_HARNESS_LEARNING=disabled` | Stops shared lifecycle eligibility without rewriting persona configuration |
 
 Existing `profile learning enable`/`disable` commands manage persona configuration.
-The [legacy reflection fan-out](persona-learning-loop.md) has separate eligibility
-rules: historical profiles without an explicit enabled key remain ineligible for
-that reflection tick. Do not apply that old default to the v1.8 harness.
+The [scheduled reflection entry points](persona-learning-loop.md) admit work to
+the shared lifecycle. Their old direct automatic-write path is historical;
+shared pause and explicit configuration disables govern the unified worker.
 
 ## When Learning Appears Stuck
 
@@ -383,6 +448,10 @@ persona-scoped and accept opaque IDs, not arbitrary evidence file paths.
 | Method | Python route | Result |
 |---|---|---|
 | GET | `/api/agents/{id}/learning` | Summary and active methods |
+| GET | `/api/agents/{id}/learning/lifecycle` | Synthesis stages, exact provenance, persisted consumers and skips |
+| GET | `/api/agents/{id}/learning/tuning` | Validated-corpus readiness, split counts, comparisons and policy history |
+| POST | `/api/agents/{id}/learning/tuning/run` | Explicit tuning queue admission, under normal eligibility controls |
+| POST | `/api/agents/{id}/learning/tuning/rollback` | Restore the predecessor recall policy with a durable receipt |
 | GET | `/api/agents/{id}/learning/records` | History with `kind`, `status`, `limit`, `cursor` |
 | GET | `/api/agents/{id}/learning/records/{record_id}` | Record, history, and linked evidence |
 | GET | `/api/agents/{id}/learning/report?since=...&until=...` | Read-only host counts and recorded changes |

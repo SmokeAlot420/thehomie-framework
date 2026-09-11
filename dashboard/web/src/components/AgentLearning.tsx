@@ -4,6 +4,7 @@ import { useFetch } from '@/lib/useFetch';
 import { Empty } from '@/components/Empty';
 import { Spinner } from '@/components/Spinner';
 import { Modal } from '@/components/Modal';
+import { LearningLifecyclePanel } from '@/components/LearningLifecycle';
 import type { LearningPage, LearningRecord, LearningReport, LearningSummary } from '@/types/learning';
 
 const buttonClass = 'px-3 py-2 rounded border border-[var(--color-border)] text-[12px] disabled:opacity-50 hover:bg-[var(--color-elevated)]';
@@ -12,6 +13,10 @@ const filters = [
   ['', 'All activity'], ['experience', 'Experiences'], ['observation', 'Outcomes'],
   ['candidate', 'Proposed changes'], ['evaluation', 'Evaluations'],
   ['activation', 'Methods'], ['failure', 'Failures'],
+  ['synthesis_cycle', 'Reflection and dream cycles'], ['synthesis_request', 'Synthesis admission receipts'],
+  ['change_proposal', 'Automatic change proposals'], ['tuning_case', 'Validated recall cases'],
+  ['tuning_corpus', 'Recall corpora'], ['tuning_run', 'Recall tuning runs'],
+  ['tuning_evaluation', 'Recall comparisons'], ['tuning_policy', 'Recall policies'],
 ];
 
 function textField(record: LearningRecord, ...keys: string[]): string {
@@ -30,6 +35,8 @@ export function AgentLearning({ agentId }: { agentId: string }) {
   const [cursors, setCursors] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [rollback, setRollback] = useState<LearningRecord | null>(null);
+  const [tuningRollback, setTuningRollback] = useState(false);
+  const [actionReceipt, setActionReceipt] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [days, setDays] = useState(7);
@@ -52,8 +59,10 @@ export function AgentLearning({ agentId }: { agentId: string }) {
     setBusy(true);
     setActionError(null);
     try {
-      await apiPost(`${base}/${path}`);
+      const receipt = await apiPost<{ status?: string; reason?: string }>(`${base}/${path}`);
+      setActionReceipt(receipt.status ? `${receipt.status.replaceAll('_', ' ')}${receipt.reason ? ` · ${receipt.reason}` : ''}` : null);
       setRollback(null);
+      setTuningRollback(false);
       summary.refresh();
       history.refresh();
       detail.refresh();
@@ -97,12 +106,14 @@ export function AgentLearning({ agentId }: { agentId: string }) {
              · Last successful check: {dispatcherCheckTime(summary.data.cognition.dispatcher.last_success_at)}</p>
           {summary.data.cognition.dispatcher.error_type && <p role="status" class="text-amber-400">{summary.data.cognition.dispatcher.error_type}</p>}
           <p>Cycles: {statusCounts(summary.data.cognition.cycles)} · Investigations: {statusCounts(summary.data.cognition.investigations)}</p>
+          {summary.data.cognition.execution_modes && <p>Execution modes: {statusCounts(summary.data.cognition.execution_modes)} · Recorded model calls: {summary.data.cognition.recorded_model_calls ?? 0}</p>}
           <p>{summary.data.cognition.delivered_contexts} executed requests received retained understanding or investigations.</p>
           <details><summary class="cursor-pointer">Hook coverage</summary><pre class="whitespace-pre-wrap break-words mt-2">{JSON.stringify(summary.data.cognition.dispatcher.adapter_coverage ?? {}, null, 2)}</pre></details>
         </section>}
       </div>
 
       {actionError && <p role="alert" class="text-[12px] text-red-400">{actionError}</p>}
+      {actionReceipt && <p role="status" class="text-[12px]">{actionReceipt}</p>}
       {summary.error && <p role="alert" class="text-[12px] text-red-400">Learning status unavailable: {summary.error}</p>}
       {summary.loading && !summary.data && <Spinner />}
       {summary.data && <>
@@ -140,6 +151,10 @@ export function AgentLearning({ agentId }: { agentId: string }) {
         </section>}
       </>}
 
+      <LearningLifecyclePanel lifecycle={summary.data?.lifecycle} tuning={summary.data?.tuning}
+        onSelect={setSelected} disabled={busy || !summary.data?.enabled || !!summary.data?.paused}
+        onTune={() => void mutate('tuning/run')} onRollback={() => setTuningRollback(true)} />
+
       <section aria-label="Learning report" class="space-y-3 border border-[var(--color-border)] rounded p-4">
         <div class="flex justify-between items-center gap-3 flex-wrap">
           <h3 class="text-[13px] font-medium">What changed</h3>
@@ -156,6 +171,10 @@ export function AgentLearning({ agentId }: { agentId: string }) {
                 ['Investigations opened', 'investigations_opened'], ['Completed thinking cycles', 'completed_cycles'],
                 ['Observations', 'observations'], ['Qualification attempts', 'qualification_attempts'],
                 ['Methods adopted', 'methods_adopted'], ['Later context inclusion', 'delivered_contexts'],
+                ['Reflection cycles', 'reflection_cycles'], ['Dream cycles', 'dream_cycles'],
+                ['Synthesis skips', 'synthesis_skips'], ['Recall tuning runs', 'recall_tuning_runs'],
+                ['Recall comparisons', 'recall_tuning_evaluations'], ['Recall policy activations', 'recall_policy_activations'],
+                ['Context-only cycles', 'context_only_cycles'], ['Recorded model calls', 'recorded_model_calls'],
               ].map(([label, key]) => <div key={key}><dt class="text-[var(--color-text-muted)]">{label}</dt><dd class="text-[20px] tabular-nums">{report.data!.counts[key] ?? 0}</dd></div>)}
             </dl>
             <p class="text-[11px] text-[var(--color-text-muted)]">Counts come from distinct recorded changes. Evaluation trials are not counted as learned ideas; context inclusion does not by itself prove better results.</p>
@@ -187,7 +206,7 @@ export function AgentLearning({ agentId }: { agentId: string }) {
           <select aria-label="Filter learning status" value={status} class="text-[12px] border border-[var(--color-border)] bg-[var(--color-card)] rounded p-2"
             onChange={(event) => { setStatus(event.currentTarget.value); setCursors([]); }}>
             <option value="">All statuses</option>
-            {['open', 'due', 'pending', 'blocked', 'retained', 'completed', 'tentative', 'supported', 'superseded', 'needs_reassessment', 'failed'].map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}
+            {['open', 'due', 'pending', 'queued', 'coalesced', 'no_signal', 'no_change', 'deferred', 'blocked', 'retained', 'completed', 'tentative', 'supported', 'superseded', 'needs_reassessment', 'failed', 'rolled_back'].map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}
           </select>
         </div>
         {history.error ? <p role="alert" class="text-[12px] text-red-400">History unavailable: {history.error}</p>
@@ -221,6 +240,10 @@ export function AgentLearning({ agentId }: { agentId: string }) {
               ['claim', 'Expected result'], ['resolution_rule', 'How it is checked'],
               ['evidence', 'Observed evidence'], ['uncertainty', 'Uncertainty'],
               ['reason', 'Reason'], ['error', 'Problem'],
+              ['execution_kind', 'Execution mode'], ['input_manifest', 'Exact input provenance'],
+              ['omitted_manifest', 'Omitted input ranges'], ['derived_input_ids', 'Derived context'],
+              ['result_ids', 'Output records'], ['comparison', 'Retrieval comparison'],
+              ['predecessor_id', 'Predecessor policy or record'],
             ].map(([key, label]) => {
               const value = detail.data!.payload[key];
               if (value === undefined || value === null || value === '') return null;
@@ -234,6 +257,13 @@ export function AgentLearning({ agentId }: { agentId: string }) {
             <pre class="text-[11px] whitespace-pre-wrap break-words bg-[var(--color-elevated)] rounded p-3">{JSON.stringify(detail.data.payload, null, 2)}</pre>
           </details>
         </>}
+      </Modal>
+      <Modal open={tuningRollback} onClose={() => { if (!busy) setTuningRollback(false); }} title="Roll back recall policy?" footer={<>
+        <button type="button" class={buttonClass} disabled={busy} onClick={() => setTuningRollback(false)}>Cancel</button>
+        <button type="button" class={buttonClass} disabled={busy} onClick={() => void mutate('tuning/rollback')}>Confirm recall rollback</button>
+      </>}>
+        <p class="text-[12px]">Restore the predecessor retrieval policy for future recall. The corpus, comparison, and policy history stay available.</p>
+        {actionError && <p role="alert" class="text-red-400 mt-3 text-[12px]">{actionError}</p>}
       </Modal>
       <Modal open={rollback !== null} onClose={() => { if (!busy) setRollback(null); }} title="Roll back this method?" footer={<>
         <button type="button" class={buttonClass} disabled={busy} onClick={() => setRollback(null)}>Cancel</button>

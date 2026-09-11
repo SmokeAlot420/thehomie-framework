@@ -40,9 +40,17 @@ RECORD_KINDS = frozenset(
         "cognitive_cycle",
         "understanding",
         "investigation",
+        "synthesis_cycle",
+        "synthesis_request",
+        "change_proposal",
+        "tuning_case",
+        "tuning_corpus",
+        "tuning_run",
+        "tuning_evaluation",
+        "tuning_policy",
     }
 )
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MAX_PAYLOAD_BYTES = 1_048_576
 _SCHEMA = (
     "CREATE TABLE identity (id INTEGER PRIMARY KEY CHECK(id=1), persona_id TEXT NOT NULL)",
@@ -180,15 +188,15 @@ class LearningStore:
             if write:
                 conn.execute("BEGIN IMMEDIATE")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {1, SCHEMA_VERSION}:
+            if version not in {1, 2, SCHEMA_VERSION}:
                 raise LearningError("unsupported learning database schema")
             owner = conn.execute("SELECT persona_id FROM identity WHERE id=1").fetchone()
             if owner is None or owner["persona_id"] != self.target.persona_id:
                 raise LearningError("learning database belongs to another profile")
-            if write and version == 1:
-                # Backup the committed v1 snapshot before the additive upgrade.
+            if write and version < SCHEMA_VERSION:
+                # Preserve the committed snapshot before this additive upgrade.
                 # BEGIN IMMEDIATE above serializes competing migration writers.
-                backup_path = self.directory / f"learning-v1-{uuid.uuid4().hex}.backup.db"
+                backup_path = self.directory / f"learning-v{version}-{uuid.uuid4().hex}.backup.db"
                 source = sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
                 backup = sqlite3.connect(backup_path)
                 try:
@@ -258,7 +266,11 @@ class LearningStore:
             elif event["event_type"] == "rollback":
                 result["status"] = "rolled_back"
                 result["rollback"] = data
-            elif event["event_type"] in {"cognitive_result", "investigation_transition"}:
+            elif event["event_type"] in {
+                "cognitive_result",
+                "investigation_transition",
+                "synthesis_result",
+            }:
                 result.update(data)
                 result["updated_at"] = event["created_at"]
             elif event["event_type"] == "cognitive_trigger":

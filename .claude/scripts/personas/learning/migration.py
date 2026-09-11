@@ -38,7 +38,7 @@ def _read_database(path: Path, identity_table: str, persona_id: str) -> dict:
         if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
             raise LearningError("corrupt learning migration source")
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        versions = {1} if identity_table == "queue_identity" else {1, 2}
+        versions = {1} if identity_table == "queue_identity" else {1, 2, 3}
         if version not in versions:
             raise LearningError("unsupported learning migration schema")
         owner = db.execute(f"SELECT persona_id FROM {identity_table} WHERE id=1").fetchone()

@@ -63,6 +63,15 @@ def _reference(row: dict) -> dict:
             "included",
             "model",
             "provider",
+            "execution_kind",
+            "synthesis_kind",
+            "input_hash",
+            "derived_input_ids",
+            "execution_id",
+            "corpus_id",
+            "run_id",
+            "policy_id",
+            "comparison",
         )
         if row.get(key) is not None
     }
@@ -81,6 +90,13 @@ def cognition_overview(service) -> dict:
         health = {"state": "unavailable", "error_type": "dispatcher_not_installed"}
     return {
         "cycles": dict(Counter(row.get("status", "unknown") for row in cycles)),
+        "execution_modes": dict(
+            Counter(row.get("execution_kind", "unspecified") for row in cycles)
+        ),
+        "recorded_model_calls": sum(
+            _recorded_model_calls(row) for row in rows if row["kind"] == "execution"
+        )
+        + sum(_foreground_model_calls(row) for row in cycles),
         "understanding": dict(Counter(row.get("status", "unknown") for row in understanding)),
         "investigations": dict(Counter(row.get("status", "unknown") for row in investigations)),
         "delivered_contexts": sum(
@@ -93,6 +109,131 @@ def cognition_overview(service) -> dict:
             for row in rows
         ),
         "dispatcher": health,
+    }
+
+
+def _recorded_model_calls(row: dict) -> int:
+    """Only concrete execution receipts count; completion alone is not inference."""
+    if (
+        not row.get("model")
+        or not row.get("provider")
+        or row.get("execution_kind") == "context_only"
+    ):
+        return 0
+    count = row.get("model_call_count")
+    if type(count) is int and count >= 0:
+        return count
+    return int(
+        bool(
+            row.get("learning_role") or row.get("cognitive_generated") or row.get("synthesis_kind")
+        )
+    )
+
+
+def _foreground_model_calls(row: dict) -> int:
+    receipt = row.get("foreground_receipt") or {}
+    return int(
+        row.get("execution_kind") == "reasoning"
+        and receipt.get("success") is True
+        and bool(receipt.get("model") and receipt.get("provider") and receipt.get("response_hash"))
+    )
+
+
+def _manifest_reference(source: dict) -> dict:
+    # Polling keeps exact identities/ranges; excerpt text remains inspectable in
+    # the cycle record without duplicating it twice per poll.
+    return {key: value for key, value in source.items() if key != "text"}
+
+
+def lifecycle_overview(service) -> dict:
+    """Read only persisted admission, consumption, and execution receipts.
+
+    Pending consumers describe admitted cycles. This projection never scans source
+    files or guesses whether an unadmitted source has been fully consumed.
+    """
+    from . import synthesis
+    from .queue import LearningQueue
+
+    rows = service.store.all()
+    by_id = {row["id"]: row for row in rows}
+    jobs = LearningQueue(service).list(include_finished=True)
+    recent = []
+    for row in sorted(
+        (item for item in rows if item["kind"] == "synthesis_cycle"),
+        key=lambda item: item["created_at"],
+        reverse=True,
+    )[:20]:
+        events = service.store.events(row["id"])
+        consumed = [item for item in events if item["event_type"] == "synthesis_consumed"]
+        reasoning = [item for item in events if item["event_type"] == "synthesis_reasoning"]
+        execution_ids = {row.get("execution_id")} | {
+            item["payload"].get("execution_id") for item in reasoning
+        }
+        executions = [by_id[record_id] for record_id in execution_ids if record_id in by_id]
+        manifest = row.get("input_manifest", [])
+        recent.append(
+            {
+                **_reference(row),
+                "input_manifest": [_manifest_reference(item) for item in manifest],
+                "omitted_manifest": row.get("omitted_manifest", []),
+                "consumption_status": "consumed" if consumed else "pending",
+                "consumed_manifest": [
+                    _manifest_reference(entry)
+                    for event in consumed
+                    for entry in event["payload"].get("manifest", [])
+                ],
+                "partial_inputs": sum(item.get("complete") is False for item in manifest),
+                "projection_status": "projected"
+                if any(item["event_type"] == "synthesis_projected" for item in events)
+                else "pending",
+                "model_calls": [
+                    {
+                        key: receipt.get(key)
+                        for key in (
+                            "id",
+                            "success",
+                            "status",
+                            "model",
+                            "provider",
+                            "lane",
+                            "cost_usd",
+                            "execution_time_ms",
+                            "error",
+                        )
+                        if receipt.get(key) is not None
+                    }
+                    for receipt in executions
+                ],
+            }
+        )
+    stage_jobs = []
+    for job in jobs:
+        if job.get("status") in {"completed", "done", "cancelled"}:
+            continue
+        payload = job.get("payload", {})
+        stage_jobs.append(
+            {
+                "id": job["id"],
+                "kind": job["kind"],
+                "stage": job["stage"],
+                "status": job["status"],
+                "record_id": payload.get("cycle_id")
+                or payload.get("candidate_id")
+                or payload.get("experience_id"),
+                "reason": job.get("last_error"),
+                "available_at": job.get("available_at"),
+            }
+        )
+    requests = [row for row in rows if row["kind"] == "synthesis_request"]
+    return {
+        "persona_id": service.target.persona_id,
+        "synthesis": synthesis.synthesis_status(service),
+        "pending_scope": "Admitted cycles only; unadmitted sources are not scanned by this read.",
+        "pending_stages": stage_jobs[:60],
+        "pending_stages_truncated": len(stage_jobs) > 60,
+        "request_statuses": dict(Counter(row.get("status", "unknown") for row in requests)),
+        "recent_cycles": recent,
+        "cycles_truncated": sum(row["kind"] == "synthesis_cycle" for row in rows) > 20,
     }
 
 
@@ -115,12 +256,19 @@ def build_learning_report(service, *, since=None, until=None) -> dict:
             "evaluation",
             "activation",
             "context",
+            "execution",
+            "synthesis_cycle",
+            "synthesis_request",
+            "change_proposal",
+            "tuning_run",
+            "tuning_evaluation",
+            "tuning_policy",
         )
     }
     transitions = [
         row
         for row in all_rows.values()
-        if row["kind"] in {"cognitive_cycle", "investigation"}
+        if row["kind"] in {"cognitive_cycle", "investigation", "synthesis_cycle", "tuning_run"}
         and start <= _stamp(row.get("updated_at", row["created_at"]), start) < end
     ]
     # Two callbacks persisting the same conclusion under different event ids do
@@ -153,9 +301,17 @@ def build_learning_report(service, *, since=None, until=None) -> dict:
         "investigations_opened": len(groups["investigation"]),
         "cognitive_cycles": len(groups["cognitive_cycle"]),
         "completed_cycles": sum(
-            row["kind"] == "cognitive_cycle" and row.get("status") == "completed"
+            row["kind"] == "cognitive_cycle"
+            and row.get("status") == "completed"
+            and row.get("execution_kind") != "context_only"
             for row in transitions
         ),
+        "context_only_cycles": sum(
+            row["kind"] == "cognitive_cycle" and row.get("execution_kind") == "context_only"
+            for row in transitions
+        ),
+        "recorded_model_calls": sum(_recorded_model_calls(row) for row in groups["execution"])
+        + sum(_foreground_model_calls(row) for row in groups["cognitive_cycle"]),
         "investigations_completed": sum(
             row["kind"] == "investigation" and row.get("status") == "completed"
             for row in transitions
@@ -165,6 +321,26 @@ def build_learning_report(service, *, since=None, until=None) -> dict:
         "qualification_passes": sum(row.get("passed") is True for row in qualifications),
         "methods_adopted": len(groups["activation"]),
         "delivered_contexts": len(contexts),
+        "reflection_cycles": sum(
+            row.get("synthesis_kind") == "reflection" for row in groups["synthesis_cycle"]
+        ),
+        "dream_cycles": sum(
+            row.get("synthesis_kind") == "dream" for row in groups["synthesis_cycle"]
+        ),
+        "synthesis_skips": sum(
+            row.get("status") not in {"queued", "coalesced"} for row in groups["synthesis_request"]
+        ),
+        "change_proposals": len(groups["change_proposal"]),
+        "recall_tuning_runs": len(groups["tuning_run"]),
+        "recall_tuning_evaluations": len(groups["tuning_evaluation"]),
+        "recall_policies_created": len(groups["tuning_policy"]),
+        "recall_policy_activations": sum(
+            event["event_type"] == "tuning_activation"
+            and start <= _stamp(event["created_at"], start) < end
+            for policy in all_rows.values()
+            if policy["kind"] == "tuning_policy"
+            for event in service.store.events(policy["id"])
+        ),
     }
     selected = list(
         {
@@ -175,6 +351,12 @@ def build_learning_report(service, *, since=None, until=None) -> dict:
             + transitions
             + qualifications
             + contexts
+            + groups["synthesis_cycle"]
+            + groups["synthesis_request"]
+            + groups["change_proposal"]
+            + groups["tuning_run"]
+            + groups["tuning_evaluation"]
+            + groups["tuning_policy"]
         }.values()
     )
     selected.sort(key=lambda row: row["created_at"], reverse=True)

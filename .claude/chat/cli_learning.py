@@ -84,6 +84,14 @@ def learning_history(
     )
 
 
+@click.command("lifecycle")
+@click.argument("name", default="default")
+@click.option("--json", "json_mode", is_flag=True)
+def learning_lifecycle(name: str, json_mode: bool) -> None:
+    """Inspect synthesis inputs, consumers, model receipts, and deferred stages."""
+    _output(lambda: operator.get_learning_operator(name).lifecycle(), json_mode)
+
+
 @click.command("show")
 @click.argument("name")
 @click.argument("record_id")
@@ -123,6 +131,7 @@ def register_learning_commands(group: click.Group) -> None:
         learning_summary,
         learning_report,
         learning_history,
+        learning_lifecycle,
         learning_show,
         learning_pause,
         learning_resume,

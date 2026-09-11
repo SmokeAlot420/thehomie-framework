@@ -1,18 +1,9 @@
-"""
-Persona Learning Tick — Scheduled fan-out for persona reflection pipelines.
+"""Legacy scheduled reflection command backed by the shared persona queue.
 
-Enumerates learning-enabled personas via call-time config reads and spawns
-per-persona reflection (memory_reflect.py -p <name>) as subprocesses on
-cheap background model tiers. One cron/scheduler entry for ALL personas.
-
-CRITICAL: config.py:40 binds paths at import time. The tick itself runs as
-the DEFAULT profile and NEVER loops profiles in-process — each persona
-pipeline runs as a subprocess with HOMIE_HOME set by build_capability_scoped_env.
-
-Usage:
-    uv run python persona_learning_tick.py           # Run learning tick
-    uv run python persona_learning_tick.py --test    # Dry run (no subprocess spawn)
-    uv run python persona_learning_tick.py --once    # Single persona (first eligible)
+Named profiles are admitted through the same eligibility, source and interval
+policy as the dispatcher. No independent reflection child is spawned. --test
+previews admission without writing, and --once considers one eligible profile.
+Old subprocess/receipt helpers remain explicitly available for migration checks.
 """
 
 from __future__ import annotations
@@ -325,6 +316,18 @@ class TickOutcome:
 
 
 def run_tick(*, test_mode: bool = False, once: bool = False) -> TickOutcome:
+    """Admit named persona reflection through shared queue eligibility."""
+    if not is_active_default_profile():
+        return TickOutcome()
+    from personas.learning.legacy_adapters import admit_profile_synthesis
+
+    receipt = admit_profile_synthesis(
+        "reflection", profiles=list_profiles(), test_mode=test_mode, once=once
+    )
+    return TickOutcome(tuple(receipt["attempted"]), tuple(receipt["failed"]))
+
+
+def _run_legacy_tick(*, test_mode: bool = False, once: bool = False) -> TickOutcome:
     """Main tick: enumerate learning-enabled personas, spawn pipelines.
 
     One tick at a time. The scheduled task is IgnoreNew, but a manual run
